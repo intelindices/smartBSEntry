@@ -20,7 +20,8 @@ dependencies = [
 [project.optional-dependencies]
 yahoo = ["yfinance>=0.2"]
 tradingview = ["tradingview-datafeed>=2.0"]
-dev = ["pytest>=7.0"]
+onnx = ["onnx>=1.14", "onnxruntime>=1.16", "onnxscript>=0.1"]
+dev = ["pytest>=7.0", "onnx>=1.14", "onnxruntime>=1.16", "onnxscript>=0.1"]
 
 [project.scripts]
 smartbs-entry-train = "smartbs_entry.train:main"

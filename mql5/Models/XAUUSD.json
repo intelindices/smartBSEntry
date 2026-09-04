@@ -1,0 +1,17 @@
+{
+  "trade_pair": "XAUUSD",
+  "feature_engine": "entry",
+  "feature_spec_hash": "817c5b30c1f1d4ed",
+  "num_inputs": 90,
+  "lookback": 64,
+  "num_classes": 3,
+  "temperature": 1.0017868280410767,
+  "num_channels": [
+    32,
+    32,
+    48,
+    48
+  ],
+  "opset": 18,
+  "note": "Regenerate with: python -m smartbs_entry.export_onnx --checkpoint <XAUUSD.pt> --out mql5/Models/XAUUSD.onnx"
+}

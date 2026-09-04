@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .eggs/
 *.egg-info/
+smartbs_entry.egg-info/
 dist/
 build/
 .cache/

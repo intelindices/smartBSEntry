@@ -42,6 +42,19 @@ export SMARTBS_DUKASCOPY_DIR=/path/to/dukascopy/cache   # optional
 python -m smartbs_entry.train --trade-pair XAUUSD --data-source dukascopy --feature-engine entry
 ```
 
+## MetaTrader 5 Expert Advisor
+
+Full fidelity port: **MQL5 features + ONNX TCN** (raw_ai). See [`mql5/README.md`](mql5/README.md).
+
+```bash
+pip install onnx onnxruntime onnxscript
+python -m smartbs_entry.export_onnx \
+  --checkpoint path/to/XAUUSD.pt \
+  --out mql5/Models/XAUUSD.onnx
+```
+
+Copy `mql5/Experts`, `mql5/Include/SmartBSEntry`, and the `.onnx` into your MT5 data folder; attach `SmartBSEntry` to an **H1** chart.
+
 ## Package layout
 
 ```
@@ -58,8 +71,11 @@ smartbs_entry/
   calibrate.py    # temperature fit
   checkpoint.py   # load / promote .pt
   predict.py      # predict_probs / predict_raw_ai
+  export_onnx.py  # .pt → ONNX for MT5
+  mql5_parity.py  # parity dump for EA Journal
   data.py         # OHLCV fetch
   dukascopy.py    # Dukascopy cache I/O
+mql5/             # Expert Advisor + includes
 ```
 
 ## Version

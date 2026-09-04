@@ -30,8 +30,8 @@ import requests
 from smartbs_entry.data import _normalize_ohlcv
 
 PACKAGE_DIR = Path(__file__).resolve().parent
-# Prefer env, then package-local cache, then monorepo mining cache (when developing inside vanta-network).
-_MONOREPO_CACHE = PACKAGE_DIR.parents[3] / "mining" / "smartbs_strategy" / "data_cache" / "dukascopy"
+# Prefer env, then monorepo mining cache (vanta-network), then package-local.
+_MONOREPO_CACHE = PACKAGE_DIR.parents[2] / "mining" / "smartbs_strategy" / "data_cache" / "dukascopy"
 _ENV_CACHE = os.environ.get("SMARTBS_DUKASCOPY_DIR", "").strip()
 DEFAULT_CACHE_DIR = (
     Path(_ENV_CACHE)
@@ -42,7 +42,7 @@ DEFAULT_CACHE_DIR = (
         else PACKAGE_DIR / "data_cache" / "dukascopy"
     )
 )
-REPO_ROOT = PACKAGE_DIR.parents[3] if (PACKAGE_DIR.parents[3] / "mining").is_dir() else PACKAGE_DIR
+REPO_ROOT = PACKAGE_DIR.parents[2] if (PACKAGE_DIR.parents[2] / "mining").is_dir() else PACKAGE_DIR
 JETTA_ROOT = "https://jetta.dukascopy.com/v1"
 
 # Trade-pair keys → Dukascopy instrument codes.
