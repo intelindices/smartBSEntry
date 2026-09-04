@@ -118,8 +118,11 @@ smartbs_entry/
 
 ---
 
-## Dependencies
+## MetaTrader 5 port (added)
 
-**Required:** `numpy`, `pandas`, `torch`, `requests`  
-**Optional:** `yfinance`, `tradingview-datafeed`  
-**Not required:** Bittensor, Flask, Polygon, Vanta subnet packages
+- `smartbs_entry/export_onnx.py` — `.pt` → ONNX (verified vs PyTorch)
+- `smartbs_entry/mql5_parity.py` — parity dump for Journal comparison
+- `mql5/` — Expert Advisor + Include library (90-ch features + ONNX raw_ai)
+- Sample: `mql5/Models/XAUUSD.onnx` + sidecar JSON
+
+See `mql5/README.md` for MT5 install steps.
