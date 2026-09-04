@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smartbs-entry"
+version = "0.9.7"
+description = "SmartBS Entry engine + TCN AI (modular, reusable; no other engines / no Vanta miner)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "Taoshi / SmartBS" }]
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "torch>=2.0",
+  "requests>=2.28",
+]
+
+[project.optional-dependencies]
+yahoo = ["yfinance>=0.2"]
+tradingview = ["tradingview-datafeed>=2.0"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+smartbs-entry-train = "smartbs_entry.train:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["smartbs_entry*"]
+
+[tool.setuptools.package-data]
+smartbs_entry = ["VERSION"]
