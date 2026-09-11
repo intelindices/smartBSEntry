@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "smartbs-entry"
+name = "smartbs"
 version = "0.9.7"
-description = "SmartBS Entry engine + TCN AI (modular, reusable; no other engines / no Vanta miner)"
+description = "SmartBS modular AI: Entry engine (smartbs_entry) + ST engines/blend (smartbs_engines)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }
@@ -25,10 +25,12 @@ dev = ["pytest>=7.0", "onnx>=1.14", "onnxruntime>=1.16", "onnxscript>=0.1"]
 
 [project.scripts]
 smartbs-entry-train = "smartbs_entry.train:main"
+smartbs-engines-train = "smartbs_engines.train:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["smartbs_entry*"]
+include = ["smartbs_entry*", "smartbs_engines*"]
 
 [tool.setuptools.package-data]
 smartbs_entry = ["VERSION"]
+smartbs_engines = ["VERSION"]

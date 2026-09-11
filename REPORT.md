@@ -1,128 +1,62 @@
-# SmartBS Entry modularization report
+# SmartBS modularization report
 
-**Date:** 2026-09-04  
+**Date:** 2026-09-10 (engines + blend added)  
 **Source:** `vanta-network` / SmartBS v0.9.7  
-**Extract location:** `packages/smartbs_entry/`  
-**Intended new repo contents:** everything under `packages/smartbs_entry/` (this folder is self-contained)
+**Repo:** https://github.com/intelindices/smartBSEntry.git  
+
+Two independent Python packages in one repo:
+
+| Package | Role |
+|---------|------|
+| `smartbs_entry` | Entry engine (90-ch) + TCN + MQL5/ONNX |
+| `smartbs_engines` | All other ST engines + equal-weight blend + TCN |
+
+Neither depends on Vanta miner / Risk Manager / hydrate / REST.
 
 ---
 
-## Goal
+## `smartbs_entry` (existing)
 
-Make **SmartBSEntryEngine** + **SmartBS AI (TCN)** a reusable module with **no dependency** on other ST engines, blend, Risk Manager, or Vanta miner REST — so it can be committed to a separate GitHub repository.
+- `SmartBSEntryEngine`, `predict_raw_ai`, train CLI, MQL5 EA
+- Excludes other ST engines and blend
 
----
+## `smartbs_engines` (new)
 
-## What was extracted
+### Engines
 
-### Public API (`import smartbs_entry`)
+`maribbon`, `bollinger`, `trend_pullback`, `smart_money`, `macd`, `candle`, `rsi_divergence`
 
-| Symbol | Role |
-|--------|------|
-| `SmartBSEntryEngine` | 90-channel multi-TF feature engine |
-| `FEATURE_NAMES` / `TF_PAIRS` / `PAIR_CHANNELS` | Feature contract |
-| `SmartBSClassifier` / `TemporalConvNet` | AI backbone (`self.tcn` key preserved for .pt compat) |
-| `SmartBSConfig` | Train/infer knobs (default `feature_engine=entry`, `num_inputs=90`) |
-| `build_feature_matrix` | OHLCV → `(n, 90)` |
-| `load_classifier` | Load `.pt` + verify `feature_spec_hash` |
-| `predict_probs` / `predict_raw_ai` | Softmax probs / argmax FLAT·LONG·SHORT (no arm / R / day-DD) |
-| `train_model` (`python -m smartbs_entry.train`) | Train + calibrate + promote checkpoint |
+### Blend
 
-### Geometry (unchanged)
+- `ACTIVE_BLEND_ENGINES` = five live engines (no candle / rsi_divergence / entry)
+- `simple_mean_blend` / `predict_blend_raw_ai`
+- Checkpoint layout: `{root}/{engine}/{PAIR}.pt`
 
-- **6 TF pairs** × **15 channels** = **90 inputs**
-- Warmup **7200** 1h bars; lookback **64**; TCN channels `[32,32,48,48]`
-- Spec hash must match live engine or load fails (same as miner)
+### Shared
+
+- TCN (`SmartBSClassifier`), data loaders (Dukascopy/Yahoo/Binance/TV), train CLI
+- `weights.equal_weights` / research helpers (live = 1/k)
 
 ### Explicitly excluded
 
-- maribbon / bollinger / candle / macd / smart_money / trend_pullback / rsi_divergence
-- Blend mean voting, `ACTIVE_BLEND_ENGINES`
-- Risk Manager, position manager, raw_arm MA gates, day-DD flatten
-- Vanta `submit-order`, hydrate, miner profile / PM2 scripts
-- Polygon / `vali_objects` data path
+- Entry engine (sibling package)
+- Risk Manager, position manager, raw_arm, hydrate, miner REST, `VANTA_SUBMIT_MAP`
+- Polygon / `vali_objects`
 
 ---
 
-## How to publish as a new GitHub repo
+## Install
 
 ```bash
-# From vanta-network root
-cd packages/smartbs_entry
-git init
-git add .
-git commit -m "Initial smartbs-entry package (Entry engine + TCN AI v0.9.7)"
-# create empty repo on GitHub, then:
-git remote add origin git@github.com:<org>/<repo>.git
-git push -u origin main
-```
-
-Optional: copy existing checkpoints separately (often gitignored / large):
-
-```bash
-# example — do not commit secrets; checkpoints are large binaries
-mkdir -p checkpoints/entry
-cp ../../mining/smartbs_strategy/checkpoints/dukascopy_10y/entry/*.pt checkpoints/entry/
-```
-
-Dukascopy cache: set `SMARTBS_DUKASCOPY_DIR` to your parquet cache, or run `python -m smartbs_entry.dukascopy`.
-
----
-
-## Install / smoke
-
-```bash
-cd packages/smartbs_entry
 pip install -e .
-python -c "from smartbs_entry import SmartBSEntryEngine, predict_raw_ai, __version__; print(__version__, SmartBSEntryEngine().num_inputs)"
+pip install -e ".[yahoo,tradingview]"
 ```
 
-Expected: `0.9.7 90`
+## Smoke
 
----
-
-## Relation to live miner (`mining/smartbs_strategy`)
-
-- Live miner **still uses** its in-tree modules (`engine_entry.py`, `model.py`, …) so production is unchanged.
-- This package is the **portable copy** for other projects / a new repo.
-- Future optional step: make mining re-export from `smartbs_entry` after `pip install -e packages/smartbs_entry` (single source of truth).
-
----
-
-## File inventory (`packages/smartbs_entry/`)
-
+```python
+import smartbs_entry, smartbs_engines
+assert smartbs_entry.list_engines() == ["entry"]
+assert "entry" not in smartbs_engines.list_engines()
+assert "maribbon" in smartbs_engines.ACTIVE_BLEND_ENGINES
 ```
-pyproject.toml
-README.md
-REPORT.md                 ← this file
-smartbs_entry/
-  VERSION                 # 0.9.7
-  __init__.py
-  engine.py
-  registry.py
-  indicators.py
-  structure_sm.py
-  model.py
-  features.py
-  labels.py
-  config.py
-  train.py
-  calibrate.py
-  calibration.py
-  checkpoint.py
-  predict.py
-  data.py
-  dukascopy.py
-  stdio_compat.py
-```
-
----
-
-## MetaTrader 5 port (added)
-
-- `smartbs_entry/export_onnx.py` — `.pt` → ONNX (verified vs PyTorch)
-- `smartbs_entry/mql5_parity.py` — parity dump for Journal comparison
-- `mql5/` — Expert Advisor + Include library (90-ch features + ONNX raw_ai)
-- Sample: `mql5/Models/XAUUSD.onnx` + sidecar JSON
-
-See `mql5/README.md` for MT5 install steps.
