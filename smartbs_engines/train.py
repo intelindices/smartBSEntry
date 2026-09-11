@@ -171,6 +171,9 @@ def train_model(cfg: SmartBSConfig) -> str:
         "feature_engine": cfg.feature_engine,
         **cal.to_config_patch(),
         "train_candles": cfg.train_candles,
+        "train_years": float(getattr(cfg, "train_years", 0.0) or 0.0),
+        "train_from_date": str(getattr(cfg, "train_from_date", "") or ""),
+        "train_align_15m": bool(getattr(cfg, "train_align_15m", True)),
         "train_assets": assets,
         "best_epoch": best_epoch,
         "best_val_loss": float(best_val) if best_val < float("inf") else None,
@@ -213,8 +216,8 @@ def parse_args() -> SmartBSConfig:
     parser.add_argument("--interval", default="1h")
     parser.add_argument(
         "--data-source",
-        default="dukascopy",
-        choices=["tradingview", "binance", "yahoo", "dukascopy"],
+        default="mt5",
+        choices=["tradingview", "binance", "yahoo", "dukascopy", "mt5"],
     )
     parser.add_argument("--tv-symbol", default="XAUUSD")
     parser.add_argument("--tv-exchange", default="OANDA")
@@ -223,18 +226,36 @@ def parse_args() -> SmartBSConfig:
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--lr", type=float, default=5e-4)
-    parser.add_argument("--train-candles", type=int, default=12000)
+    parser.add_argument("--train-candles", type=int, default=0)
+    parser.add_argument(
+        "--train-years",
+        type=float,
+        default=10.0,
+        help="1h only: unified calendar years back from series end (0=off)",
+    )
+    parser.add_argument(
+        "--train-from-date",
+        default="2022-06-14",
+        help="1h only: UTC inclusive train start YYYY-MM-DD (empty=off)",
+    )
+    parser.add_argument(
+        "--train-align-15m",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="1h only: also clip to first available 15m bar (default on)",
+    )
     parser.add_argument("--holdout-days", type=int, default=0)
     parser.add_argument("--checkpoint", default="")
     parser.add_argument("--label-mode", choices=["triple_barrier", "forward_return"], default="triple_barrier")
     parser.add_argument("--train-assets", default="")
     parser.add_argument("--leverage", type=float, default=0.1, help="Lot size stamped into checkpoint metadata")
-    from smartbs_engines.registry import BLEND_ENGINES, list_engines
+    from smartbs_engines.registry import BLEND_ENGINES
+
     parser.add_argument(
         "--feature-engine",
         default="maribbon",
         choices=list(BLEND_ENGINES),
-        help="ST engine to train (not entry — use smartbs_entry for that)",
+        help="ST engine to train (maribbon, dbb, macd, …)",
     )
     args = parser.parse_args()
 
@@ -258,6 +279,9 @@ def parse_args() -> SmartBSConfig:
         batch_size=args.batch_size,
         learning_rate=args.lr,
         train_candles=args.train_candles,
+        train_years=float(args.train_years),
+        train_from_date=str(args.train_from_date or ""),
+        train_align_15m=bool(args.train_align_15m),
         holdout_days=args.holdout_days,
         checkpoint_path=args.checkpoint,
         label_mode=args.label_mode,

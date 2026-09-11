@@ -34,7 +34,7 @@ def build_feature_matrix(
     """Build ``(n, num_features)`` from 1H OHLCV via the selected engine."""
     name = normalize_feature_engine(feature_engine)
     eng = get_engine(name)
-    if name in ("smart_money", "rsi_divergence"):
+    if name in ("smart_money", "rsi_divergence", "dbb"):
         return eng.compute(df, symbol=symbol, data_source=data_source).features
     return eng.compute(df).features
 

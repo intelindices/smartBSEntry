@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smartbs"
-version = "0.9.7"
-description = "SmartBS modular AI: Entry engine (smartbs_entry) + ST engines/blend (smartbs_engines)"
+version = "0.10.0"
+description = "SmartBS modular ST engines + equal-weight blend + ONNX/MQL5 raw_ai"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }
@@ -21,16 +21,16 @@ dependencies = [
 yahoo = ["yfinance>=0.2"]
 tradingview = ["tradingview-datafeed>=2.0"]
 onnx = ["onnx>=1.14", "onnxruntime>=1.16", "onnxscript>=0.1"]
+mt5 = ["MetaTrader5>=5.0"]
 dev = ["pytest>=7.0", "onnx>=1.14", "onnxruntime>=1.16", "onnxscript>=0.1"]
 
 [project.scripts]
-smartbs-entry-train = "smartbs_entry.train:main"
 smartbs-engines-train = "smartbs_engines.train:main"
+smartbs-export-onnx = "smartbs_engines.export_onnx:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["smartbs_entry*", "smartbs_engines*"]
+include = ["smartbs_engines*"]
 
 [tool.setuptools.package-data]
-smartbs_entry = ["VERSION"]
 smartbs_engines = ["VERSION"]

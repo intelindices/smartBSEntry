@@ -1,0 +1,164 @@
+//@version=5
+indicator("smartBSIndicator", overlay=true, max_labels_count=500)
+
+// ── Inputs ──────────────────────────────────────────────────────────
+grpEma = "1H EMA"
+emaFastLen = input.int(14, "Fast EMA", minval=1, group=grpEma)
+emaSlowLen = input.int(48, "Slow EMA", minval=1, group=grpEma)
+showC      = input.bool(true, "Mark 1H C (range/body > 2 & |body| > ATR9)", group=grpEma)
+
+grpRsi = "RSI reverse (T/mT arm → R confirm)"
+rsiLen = input.int(14, "RSI length", minval=1, group=grpRsi)
+rsiOb  = input.float(70.0, "Overbought", group=grpRsi)
+rsiOs  = input.float(30.0, "Oversold", group=grpRsi)
+showR  = input.bool(true, "Mark 1H R (after T arm)", group=grpRsi)
+showMr = input.bool(true, "Mark 15m mR (after mT arm)", group=grpRsi)
+
+grpSm = "15m Structure (ChoCH / BOS)"
+swingLen  = input.int(5, "Swing length", minval=1, group=grpSm)
+showChoch = input.bool(true, "Mark ChoCH", group=grpSm)
+showBos   = input.bool(true, "Mark BOS", group=grpSm)
+
+tfH1  = "60"
+tfM15 = "15"
+
+// ── RSI turn arms T/mT (not plotted); R when close confirms vs fast EMA ──
+// OS reclaim (+1) → wait close > fastEMA
+// OB exit   (−1) → wait close < fastEMA
+f_rsi_reverse(int rLen, float ob, float os, int emaLen) =>
+    float rsi = ta.rsi(close, rLen)
+    float emaF = ta.ema(close, emaLen)
+    int turn = 0
+    if ta.crossover(rsi, os)
+        turn := 1
+    else if ta.crossunder(rsi, ob)
+        turn := -1
+
+    var int arm = 0
+    if turn != 0
+        arm := turn
+
+    int rDir = 0
+    if arm == 1 and close > emaF
+        rDir := 1
+        arm := 0
+    else if arm == -1 and close < emaF
+        rDir := -1
+        arm := 0
+    rDir
+
+// ── 15m structure + mR ──────────────────────────────────────────────
+f_m15_pack(int len, int rLen, float ob, float os, int emaLen) =>
+    float ph = ta.pivothigh(high, len, len)
+    float pl = ta.pivotlow(low, len, len)
+    var float sh = na
+    var float sl = na
+    if not na(ph)
+        sh := ph
+    if not na(pl)
+        sl := pl
+
+    float pSh = sh[1]
+    float pSl = sl[1]
+    bool brokeUp = not na(pSh) and close > pSh
+    bool brokeDn = not na(pSl) and close < pSl
+    bool newBosUp = brokeUp and not brokeUp[1]
+    bool newBosDn = brokeDn and not brokeDn[1]
+    bool chochUp = newBosUp and brokeDn[1]
+    bool chochDn = newBosDn and brokeUp[1]
+    bool bosUp = newBosUp and not chochUp
+    bool bosDn = newBosDn and not chochDn
+
+    int mR = f_rsi_reverse(rLen, ob, os, emaLen)
+    [mR, bosUp, bosDn, chochUp, chochDn]
+
+f_c_mark() =>
+    float body = open - close
+    float atr9 = ta.atr(9)
+    bool ratioOk = math.abs(body) > 0 ? math.abs((high - low) / body) > 2.0 : false
+    ratioOk and math.abs(body) > atr9
+
+// ── 1H EMA + R + C ──────────────────────────────────────────────────
+[emaFast1h, emaSlow1h, rH1Raw, cH1Raw] = request.security(
+     syminfo.tickerid, tfH1,
+     [ta.ema(close, emaFastLen), ta.ema(close, emaSlowLen),
+      f_rsi_reverse(rsiLen, rsiOb, rsiOs, emaFastLen), f_c_mark()],
+     barmerge.gaps_off, barmerge.lookahead_off)
+
+plot(emaFast1h, "1H EMA Fast", color=color.new(color.teal, 0), linewidth=2)
+plot(emaSlow1h, "1H EMA Slow", color=color.new(color.orange, 0), linewidth=2)
+
+bool rMark1h = showR and rH1Raw != 0 and rH1Raw != rH1Raw[1]
+if rMark1h
+    if rH1Raw > 0
+        label.new(bar_index, low, "R",
+             style=label.style_label_up,
+             color=color.new(color.teal, 0),
+             textcolor=color.white,
+             size=size.small)
+    else
+        label.new(bar_index, high, "R",
+             style=label.style_label_down,
+             color=color.new(color.purple, 0),
+             textcolor=color.white,
+             size=size.small)
+
+bool cMark1h = showC and cH1Raw and not cH1Raw[1]
+if cMark1h
+    label.new(bar_index, high, "C",
+         style=label.style_label_down,
+         color=color.new(color.gray, 0),
+         textcolor=color.white,
+         size=size.tiny)
+
+// ── 15m mR + ChoCH / BOS ────────────────────────────────────────────
+[mRRaw, bosUp15, bosDn15, chochUp15, chochDn15] = request.security(
+     syminfo.tickerid, tfM15,
+     f_m15_pack(swingLen, rsiLen, rsiOb, rsiOs, emaFastLen),
+     barmerge.gaps_off, barmerge.lookahead_off)
+
+bool mRMark      = showMr and mRRaw != 0 and mRRaw != mRRaw[1]
+bool bosUpMark   = showBos and bosUp15 and not bosUp15[1]
+bool bosDnMark   = showBos and bosDn15 and not bosDn15[1]
+bool chochUpMark = showChoch and chochUp15 and not chochUp15[1]
+bool chochDnMark = showChoch and chochDn15 and not chochDn15[1]
+
+if mRMark
+    if mRRaw > 0
+        label.new(bar_index, low, "mR",
+             style=label.style_label_up,
+             color=color.new(color.blue, 0),
+             textcolor=color.white,
+             size=size.small)
+    else
+        label.new(bar_index, high, "mR",
+             style=label.style_label_down,
+             color=color.new(color.fuchsia, 0),
+             textcolor=color.white,
+             size=size.small)
+
+if bosUpMark
+    label.new(bar_index, low, "BOS",
+         style=label.style_label_up,
+         color=color.new(color.green, 0),
+         textcolor=color.white,
+         size=size.tiny)
+if bosDnMark
+    label.new(bar_index, high, "BOS",
+         style=label.style_label_down,
+         color=color.new(color.red, 0),
+         textcolor=color.white,
+         size=size.tiny)
+
+if chochUpMark
+    label.new(bar_index, low, "CH",
+         style=label.style_label_up,
+         color=color.new(color.lime, 20),
+         textcolor=color.black,
+         size=size.small)
+if chochDnMark
+    label.new(bar_index, high, "CH",
+         style=label.style_label_down,
+         color=color.new(color.maroon, 0),
+         textcolor=color.white,
+         size=size.small)

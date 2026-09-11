@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| SmartBS Entry — indicators (parity with smartbs_entry.indicators)|
+//| SmartBS — shared indicator helpers (SMA / stdev / ATR / swings)  |
 //+------------------------------------------------------------------+
 #ifndef SMARTBS_ENTRY_INDICATORS_MQH
 #define SMARTBS_ENTRY_INDICATORS_MQH
@@ -37,6 +37,95 @@ void SB_EMA(const double &src[], const int length, double &out[])
       out[i] = alpha * src[i] + (1.0 - alpha) * out[i - 1];
   }
 
+void SB_SMA(const double &src[], const int length, double &out[])
+  {
+   int n = ArraySize(src);
+   ArrayResize(out, n);
+   ArrayInitialize(out, 0.0);
+   if(n <= 0 || length <= 0)
+      return;
+   double sum = 0.0;
+   for(int i = 0; i < n; i++)
+     {
+      sum += src[i];
+      if(i >= length)
+         sum -= src[i - length];
+      if(i >= length - 1)
+         out[i] = sum / (double)length;
+      else
+         out[i] = sum / (double)(i + 1);
+     }
+  }
+
+// pandas rolling(length, min_periods=length).mean — 0 until window is full
+void SB_SMA_Strict(const double &src[], const int length, double &out[])
+  {
+   int n = ArraySize(src);
+   ArrayResize(out, n);
+   ArrayInitialize(out, 0.0);
+   if(n <= 0 || length <= 0)
+      return;
+   double sum = 0.0;
+   for(int i = 0; i < n; i++)
+     {
+      sum += src[i];
+      if(i >= length)
+         sum -= src[i - length];
+      if(i >= length - 1)
+         out[i] = sum / (double)length;
+     }
+  }
+
+// Population stdev (ddof=0), TradingView ta.stdev default; 0 until window full
+void SB_StdevPop(const double &src[], const int length, double &out[])
+  {
+   int n = ArraySize(src);
+   ArrayResize(out, n);
+   ArrayInitialize(out, 0.0);
+   if(n <= 0 || length <= 0)
+      return;
+   for(int i = length - 1; i < n; i++)
+     {
+      double mean = 0.0;
+      for(int j = i - length + 1; j <= i; j++)
+         mean += src[j];
+      mean /= (double)length;
+      double acc = 0.0;
+      for(int j = i - length + 1; j <= i; j++)
+        {
+         double d = src[j] - mean;
+         acc += d * d;
+        }
+      out[i] = MathSqrt(acc / (double)length);
+     }
+  }
+
+void SB_Slope(const double &src[], double &out[])
+  {
+   int n = ArraySize(src);
+   ArrayResize(out, n);
+   ArrayInitialize(out, 0.0);
+   for(int i = 1; i < n; i++)
+      out[i] = MathArctan(src[i] - src[i - 1]);
+  }
+
+void SB_RsiSign(const double &close[], double &out[])
+  {
+   int n = ArraySize(close);
+   double rsi[];
+   SB_RSI(close, 14, rsi);
+   ArrayResize(out, n);
+   for(int i = 0; i < n; i++)
+     {
+      if(rsi[i] > 70.0)
+         out[i] = 1.0;
+      else if(rsi[i] < 30.0)
+         out[i] = -1.0;
+      else
+         out[i] = 0.0;
+     }
+  }
+
 void SB_ATR(const double &high[], const double &low[], const double &close[],
             const int length, double &out[])
   {
@@ -59,6 +148,72 @@ void SB_ATR(const double &high[], const double &low[], const double &close[],
    out[0] = tr[0];
    for(int i = 1; i < n; i++)
       out[i] = alpha * tr[i] + (1.0 - alpha) * out[i - 1];
+  }
+
+// Wilder RMA helper (same recursion as ATR)
+void SB_RMA(const double &src[], const int length, double &out[])
+  {
+   int n = ArraySize(src);
+   ArrayResize(out, n);
+   ArrayInitialize(out, 0.0);
+   if(n <= 0 || length <= 0)
+      return;
+   double alpha = 1.0 / length;
+   out[0] = src[0];
+   for(int i = 1; i < n; i++)
+      out[i] = alpha * src[i] + (1.0 - alpha) * out[i - 1];
+  }
+
+// TradingView-style ADX (0..100). Caller may scale /100.
+void SB_ADX(const double &high[], const double &low[], const double &close[],
+            const int length, double &out[])
+  {
+   int n = ArraySize(close);
+   ArrayResize(out, n);
+   ArrayInitialize(out, 0.0);
+   if(n < 2 || length <= 0)
+      return;
+
+   double tr[], plus_dm[], minus_dm[];
+   ArrayResize(tr, n);
+   ArrayResize(plus_dm, n);
+   ArrayResize(minus_dm, n);
+   tr[0] = 0.0;
+   plus_dm[0] = 0.0;
+   minus_dm[0] = 0.0;
+   for(int i = 1; i < n; i++)
+     {
+      double up = high[i] - high[i - 1];
+      double down = low[i - 1] - low[i];
+      plus_dm[i] = (up > down && up > 0.0) ? up : 0.0;
+      minus_dm[i] = (down > up && down > 0.0) ? down : 0.0;
+      double a = high[i] - low[i];
+      double b = MathAbs(high[i] - close[i - 1]);
+      double c = MathAbs(low[i] - close[i - 1]);
+      tr[i] = MathMax(a, MathMax(b, c));
+     }
+
+   double tr_s[], plus_s[], minus_s[];
+   SB_RMA(tr, length, tr_s);
+   SB_RMA(plus_dm, length, plus_s);
+   SB_RMA(minus_dm, length, minus_s);
+
+   double dx[];
+   ArrayResize(dx, n);
+   ArrayInitialize(dx, 0.0);
+   for(int i = 0; i < n; i++)
+     {
+      if(tr_s[i] <= 1e-12)
+         continue;
+      double pdi = 100.0 * plus_s[i] / tr_s[i];
+      double mdi = 100.0 * minus_s[i] / tr_s[i];
+      double den = pdi + mdi;
+      if(den > 1e-12)
+         dx[i] = 100.0 * MathAbs(pdi - mdi) / den;
+     }
+   SB_RMA(dx, length, out);
+   for(int i = 0; i < length && i < n; i++)
+      out[i] = 0.0;
   }
 
 void SB_RSI(const double &close[], const int period, double &out[])

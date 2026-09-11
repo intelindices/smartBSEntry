@@ -99,6 +99,9 @@ class SmartBSConfig:
     early_stop_patience: int = 3
     learning_rate: float = 5e-4
     train_candles: int = 12000
+    train_years: float = 10.0
+    train_from_date: str = "2022-06-14"
+    train_align_15m: bool = True
     holdout_days: int = 0
     val_ratio: float = 0.15
     seed: int = 42

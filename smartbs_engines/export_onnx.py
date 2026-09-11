@@ -1,13 +1,13 @@
-"""Export a SmartBS Entry ``.pt`` checkpoint to ONNX for MetaTrader 5.
+"""Export a SmartBS engines ``.pt`` checkpoint to ONNX for MetaTrader 5.
 
-Input:  ``features`` float32 [1, num_inputs, lookback]  (e.g. 1×90×64)
+Input:  ``features`` float32 [1, num_inputs, lookback]
 Output: ``logits``   float32 [1, 3]
 
-Also writes a JSON sidecar with temperature / lookback / spec hash for the EA.
+Also writes a JSON sidecar with temperature / lookback / feature_engine for the EA.
 
-    python -m smartbs_entry.export_onnx \\
-      --checkpoint path/to/XAUUSD.pt \\
-      --out mql5/Models/XAUUSD.onnx
+    python -m smartbs_engines.export_onnx \\
+      --checkpoint checkpoints/dbb/XAUUSD.pt \\
+      --out mql5/Models/XAUUSD_dbb.onnx
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from smartbs_entry.checkpoint import load_classifier
-from smartbs_entry.stdio_compat import configure_stdio
+from smartbs_engines.checkpoint import load_classifier
+from smartbs_engines.stdio_compat import configure_stdio
 
 configure_stdio()
 
@@ -31,18 +31,13 @@ def _remove_weight_norm(module: nn.Module) -> None:
     """Bake weight_norm parametrizations so ONNX export stays simple for MT5."""
     for child in list(module.children()):
         _remove_weight_norm(child)
-    # torch.nn.utils.parametrizations.weight_norm
     try:
         from torch.nn.utils.parametrize import is_parametrized, remove_parametrizations
 
-        for name, _ in list(module.named_parameters(recurse=False)):
-            pass
-        # Conv1d layers may carry parametrizations on "weight"
         if is_parametrized(module, "weight"):
             remove_parametrizations(module, "weight", leave_parametrized=False)
     except Exception:
         pass
-    # Legacy torch.nn.utils.weight_norm
     try:
         from torch.nn.utils import remove_weight_norm
 
@@ -84,13 +79,14 @@ def export_onnx(
         input_names=["features"],
         output_names=["logits"],
         dynamic_axes=None,
+        dynamo=False,
     )
 
     meta = {
         "checkpoint": os.path.abspath(checkpoint_path),
         "onnx": str(out.resolve()),
         "trade_pair": cfg.get("trade_pair"),
-        "feature_engine": cfg.get("feature_engine", "entry"),
+        "feature_engine": cfg.get("feature_engine", "maribbon"),
         "feature_spec_hash": cfg.get("feature_spec_hash"),
         "num_inputs": num_inputs,
         "lookback": lookback,
@@ -124,8 +120,8 @@ def export_onnx(
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Export SmartBS Entry checkpoint to ONNX for MT5")
-    ap.add_argument("--checkpoint", required=True, help="Path to entry/*.pt")
+    ap = argparse.ArgumentParser(description="Export SmartBS engines checkpoint to ONNX for MT5")
+    ap.add_argument("--checkpoint", required=True, help="Path to engine/*.pt")
     ap.add_argument("--out", required=True, help="Output .onnx path")
     ap.add_argument("--opset", type=int, default=18)
     ap.add_argument("--no-verify", action="store_true")

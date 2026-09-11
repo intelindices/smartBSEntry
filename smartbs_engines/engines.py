@@ -7,15 +7,16 @@ callers import: normalize the name, report warm-up, refuse retired engines.
 from __future__ import annotations
 
 FEATURE_ENGINE_MARIBBON = "maribbon"
-REMOVED_ENGINES = frozenset({"sbs", "pine", "pbs"})
+REMOVED_ENGINES = frozenset({"sbs", "pine", "pbs", "entry", "bollinger"})
 
 
 def normalize_feature_engine(engine: str | None) -> str:
     eng = (engine or FEATURE_ENGINE_MARIBBON).strip().lower()
     if eng in REMOVED_ENGINES:
+        hint = "dbb" if eng == "bollinger" else "maribbon"
         raise ValueError(
-            f"feature_engine={eng!r} was removed with the Pine/SBS stack. "
-            "Retrain with --feature-engine maribbon (or another ST engine)."
+            f"feature_engine={eng!r} was removed. "
+            f"Retrain with --feature-engine {hint} (or another ST engine)."
         )
     from smartbs_engines.registry import list_engines
 

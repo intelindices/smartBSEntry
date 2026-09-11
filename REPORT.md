@@ -1,62 +1,28 @@
 # SmartBS modularization report
 
-**Date:** 2026-09-10 (engines + blend added)  
-**Source:** `vanta-network` / SmartBS v0.9.7  
+**Date:** 2026-09-11 (Entry removed; dBB replaces bollinger)  
 **Repo:** https://github.com/intelindices/smartBSEntry.git  
 
-Two independent Python packages in one repo:
+Single Python package:
 
 | Package | Role |
 |---------|------|
-| `smartbs_entry` | Entry engine (90-ch) + TCN + MQL5/ONNX |
-| `smartbs_engines` | All other ST engines + equal-weight blend + TCN |
+| `smartbs_engines` | ST feature engines + equal-weight blend + TCN + ONNX export |
 
-Neither depends on Vanta miner / Risk Manager / hydrate / REST.
+No Entry engine. No Vanta miner / Risk Manager / hydrate / REST.
 
----
+## Engines
 
-## `smartbs_entry` (existing)
+`maribbon`, `dbb` (26ch double-BB), `trend_pullback`, `smart_money`, `macd`, `candle`, `rsi_divergence`
 
-- `SmartBSEntryEngine`, `predict_raw_ai`, train CLI, MQL5 EA
-- Excludes other ST engines and blend
-
-## `smartbs_engines` (new)
-
-### Engines
-
-`maribbon`, `bollinger`, `trend_pullback`, `smart_money`, `macd`, `candle`, `rsi_divergence`
+Retired: `entry`, `bollinger` (use `dbb`).
 
 ### Blend
 
-- `ACTIVE_BLEND_ENGINES` = five live engines (no candle / rsi_divergence / entry)
-- `simple_mean_blend` / `predict_blend_raw_ai`
+- `ACTIVE_BLEND_ENGINES` = maribbon, dbb, trend_pullback, smart_money, macd
+- `simple_mean_blend` / `predict_blend_raw_ai` (any subset via `engines=`)
 - Checkpoint layout: `{root}/{engine}/{PAIR}.pt`
 
-### Shared
+### MQL5
 
-- TCN (`SmartBSClassifier`), data loaders (Dukascopy/Yahoo/Binance/TV), train CLI
-- `weights.equal_weights` / research helpers (live = 1/k)
-
-### Explicitly excluded
-
-- Entry engine (sibling package)
-- Risk Manager, position manager, raw_arm, hydrate, miner REST, `VANTA_SUBMIT_MAP`
-- Polygon / `vali_objects`
-
----
-
-## Install
-
-```bash
-pip install -e .
-pip install -e ".[yahoo,tradingview]"
-```
-
-## Smoke
-
-```python
-import smartbs_entry, smartbs_engines
-assert smartbs_entry.list_engines() == ["entry"]
-assert "entry" not in smartbs_engines.list_engines()
-assert "maribbon" in smartbs_engines.ACTIVE_BLEND_ENGINES
-```
+EA is an ONNX **raw_ai** shell only. Feature builder ported today: `dbb`. Bake models with `python -m smartbs_engines.export_onnx`.

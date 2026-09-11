@@ -363,6 +363,23 @@ def fetch_klines(
         print(f"Using permanent Dukascopy cache for {sym} {interval} ({len(cached)} bars)")
         return cached
 
+    if source in ("mt5", "metatrader", "broker"):
+        from smartbs_engines.mt5_data import load_mt5_klines
+
+        cached = load_mt5_klines(
+            sym,
+            interval,
+            max_candles=None if not max_candles else int(max_candles),
+            refresh=False,
+        )
+        if cached is None or cached.empty:
+            raise FileNotFoundError(
+                f"MT5 cache missing for {sym} {interval}. "
+                f"Run: python -m smartbs_engines.mt5_data"
+            )
+        print(f"Using MT5 broker cache for {sym} {interval} ({len(cached)} bars)")
+        return cached
+
     if source == "binance":
         return fetch_binance_klines(
             symbol=binance_symbol or symbol or "BTCUSDT",
@@ -386,7 +403,7 @@ def fetch_mtf_klines(
     max_1h_candles: int = 8760,
     binance_symbol: str | None = None,
 ) -> pd.DataFrame:
-    """Fetch the 1H series used by the Entry engine / AI."""
+    """Fetch the 1H series used by ST engines / AI."""
     sym = symbol.replace("/", "").upper()
     print(f"Fetching 1H series ({max_1h_candles} bars) from {source}...")
     return fetch_klines(

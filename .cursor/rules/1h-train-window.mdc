@@ -1,0 +1,19 @@
+---
+description: 1h training always starts 2022-06-14
+alwaysApply: true
+---
+
+# 1h training data window
+
+For **1h** SmartBS Entry training, **always start from `2022-06-14` (UTC)** (`train_from_date=2022-06-14`).
+
+Do **not** train on pre-2022-06-14 1h history unless the user explicitly clears `--train-from-date ""`.
+
+Pipeline order in `smartbs_engines/calibrate.py`:
+
+1. Optional `train_years` clip (default 10y from series end)
+2. **`train_from_date=2022-06-14`** (required default)
+3. `train_align_15m=True` (also bump start if 15m begins later)
+4. `--holdout-days` reserved at the end for replay
+
+Reason: MT5 15m (needed for `current_candle_direction_4h`) starts ~2022-06-14; earlier 1h bars zero-fill that channel and break train/val.

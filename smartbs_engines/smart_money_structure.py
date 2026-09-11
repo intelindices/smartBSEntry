@@ -121,9 +121,19 @@ def load_aligned_15m(
     t1 = int(df_1h["open_time"].iloc[-1]) + HOUR_MS
 
     if src in ("dukascopy", "duka"):
-        from smartbs_engines.download_dukascopy import load_dukascopy_klines
+        from smartbs_engines.dukascopy import load_dukascopy_klines
 
         df15 = load_dukascopy_klines(sym, interval="15m", max_candles=None)
+        if df15 is None or df15.empty:
+            return None
+        mask = (df15["open_time"] >= t0) & (df15["open_time"] < t1)
+        out = df15.loc[mask].reset_index(drop=True)
+        return out if len(out) else None
+
+    if src in ("mt5", "metatrader", "broker"):
+        from smartbs_engines.mt5_data import load_mt5_klines
+
+        df15 = load_mt5_klines(sym, "15m", max_candles=None, refresh=False)
         if df15 is None or df15.empty:
             return None
         mask = (df15["open_time"] >= t0) & (df15["open_time"] < t1)

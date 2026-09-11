@@ -1,11 +1,13 @@
 //+------------------------------------------------------------------+
-//| SmartBS Entry — ONNX TCN loader / runner                         |
+//| SmartBS — ONNX TCN loader / runner (max 48 channels × lookback)  |
 //+------------------------------------------------------------------+
-#ifndef SMARTBS_ENTRY_ONNX_MQH
-#define SMARTBS_ENTRY_ONNX_MQH
+#ifndef SMARTBS_ONNX_MQH
+#define SMARTBS_ONNX_MQH
 
 #include "Softmax.mqh"
-#include "EntryFeatures.mqh"
+
+#define SB_ONNX_MAX_INPUTS 48
+#define SB_ONNX_MAX_LOOKBACK 64
 
 class CSBOnnxModel
   {
@@ -15,30 +17,49 @@ private:
    int      m_num_inputs;
    double   m_temperature;
    bool     m_ready;
+   // Fixed 3-D buffers — MT5 OnnxRun does not reliably bind dynamic 1-D float[]
+   float    m_in[1][SB_ONNX_MAX_INPUTS][SB_ONNX_MAX_LOOKBACK];
+   float    m_out[1][3];
 
 public:
-   CSBOnnxModel(void) : m_handle(INVALID_HANDLE), m_lookback(64), m_num_inputs(90),
-                        m_temperature(1.0), m_ready(false) {}
+   CSBOnnxModel(void) : m_handle(INVALID_HANDLE), m_lookback(64), m_num_inputs(26),
+                        m_temperature(1.0), m_ready(false)
+     {
+      ArrayInitialize(m_in, 0.0f);
+      ArrayInitialize(m_out, 0.0f);
+     }
 
    ~CSBOnnxModel(void) { Shutdown(); }
 
    void SetTemperature(const double t) { m_temperature = (t > 1e-8 ? t : 1.0); }
-   void SetLookback(const int lb) { m_lookback = lb; }
+   void SetLookback(const int lb)
+     {
+      if(lb > 0 && lb <= SB_ONNX_MAX_LOOKBACK)
+         m_lookback = lb;
+     }
+   void SetNumInputs(const int n)
+     {
+      if(n > 0 && n <= SB_ONNX_MAX_INPUTS)
+         m_num_inputs = n;
+     }
    int  Lookback(void) const { return m_lookback; }
+   int  NumInputs(void) const { return m_num_inputs; }
    bool Ready(void) const { return m_ready; }
 
    bool Load(const string onnx_filename)
      {
       Shutdown();
-      // Place file under MQL5/Files/ or Terminal Common\Files
-      m_handle = OnnxCreate(onnx_filename, ONNX_DEFAULT);
+      m_handle = OnnxCreate(onnx_filename, ONNX_USE_CPU_ONLY);
+      if(m_handle == INVALID_HANDLE)
+         m_handle = OnnxCreate(onnx_filename, ONNX_USE_CPU_ONLY | ONNX_COMMON_FOLDER);
       if(m_handle == INVALID_HANDLE)
         {
-         Print("OnnxCreate failed for ", onnx_filename, " err=", GetLastError());
+         Print("OnnxCreate failed for ", onnx_filename, " err=", GetLastError(),
+               " exist=", FileIsExist(onnx_filename),
+               " common=", FileIsExist(onnx_filename, FILE_COMMON));
          return false;
         }
 
-      // Shape: features [1, 90, lookback]
       ulong input_shape[];
       ArrayResize(input_shape, 3);
       input_shape[0] = 1;
@@ -77,7 +98,7 @@ public:
       m_ready = false;
      }
 
-   // window: flat float[90 * lookback] channel-major
+   // window: flat float[num_inputs * lookback] channel-major (c * lookback + t)
    // returns class 0=FLAT 1=LONG 2=SHORT; fills probs[3]
    int Predict(const float &window[], double &probs[], double &logits[])
      {
@@ -86,25 +107,27 @@ public:
       if(!m_ready)
          return 0;
 
-      // MT5 OnnxRun expects typed arrays matching shapes
-      float in_data[];
-      ArrayResize(in_data, m_num_inputs * m_lookback);
       int n = ArraySize(window);
-      int copy = MathMin(n, m_num_inputs * m_lookback);
-      for(int i = 0; i < copy; i++)
-         in_data[i] = window[i];
+      int need = m_num_inputs * m_lookback;
+      if(n < need)
+        {
+         Print("ONNX window too short: ", n, " need ", need);
+         return 0;
+        }
 
-      float out_data[];
-      ArrayResize(out_data, 3);
+      ArrayInitialize(m_in, 0.0f);
+      for(int c = 0; c < m_num_inputs; c++)
+         for(int t = 0; t < m_lookback; t++)
+            m_in[0][c][t] = window[c * m_lookback + t];
 
-      if(!OnnxRun(m_handle, ONNX_NO_CONVERSION, in_data, out_data))
+      if(!OnnxRun(m_handle, ONNX_NO_CONVERSION, m_in, m_out))
         {
          Print("OnnxRun failed err=", GetLastError());
          return 0;
         }
 
       for(int i = 0; i < 3; i++)
-         logits[i] = (double)out_data[i];
+         logits[i] = (double)m_out[0][i];
       SB_SoftmaxTemp(logits, m_temperature, probs);
       return SB_Argmax(probs);
      }

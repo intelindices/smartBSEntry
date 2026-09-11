@@ -1,6 +1,6 @@
-"""ST-engine registry for all engines except Entry (see ``smartbs_entry``).
+"""ST-engine registry for all SmartBS feature engines.
 
-Live blend pool: ``ACTIVE_BLEND_ENGINES`` (maribbon, bollinger, trend_pullback,
+Live blend pool: ``ACTIVE_BLEND_ENGINES`` (maribbon, dbb, trend_pullback,
 smart_money, macd). ``candle`` and ``rsi_divergence`` stay registered/trainable.
 """
 
@@ -82,11 +82,6 @@ def register_engine(name: str, factory: Callable[[], BaseSTEngine]) -> None:
 def get_engine(name: str) -> BaseSTEngine:
     _ensure_registered()
     key = (name or "").strip().lower()
-    if key == "entry":
-        raise ValueError(
-            "Engine 'entry' lives in the sibling package ``smartbs_entry``. "
-            f"This package provides: {sorted(_REGISTRY)}"
-        )
     if key not in _REGISTRY:
         raise ValueError(f"Unknown engine {name!r}; known: {sorted(_REGISTRY)}")
     return _REGISTRY[key]()
@@ -133,15 +128,15 @@ def _ensure_registered() -> None:
     global _REGISTERED
     if _REGISTERED:
         return
-    from smartbs_engines.engine_bollinger import BollingerBandSTEngine
     from smartbs_engines.engine_candle import CandlePatternSTEngine
+    from smartbs_engines.engine_dbb import SmartBSDbbEngine
     from smartbs_engines.engine_macd import MACDSTEngine
     from smartbs_engines.engine_rsi_divergence import RSIDivergenceSTEngine
     from smartbs_engines.engine_smart_money import SmartMoneySTEngine
     from smartbs_engines.engine_trend_pullback import TrendPullbackSTEngine
 
     register_engine("maribbon", MARibbonSTEngine)
-    register_engine("bollinger", BollingerBandSTEngine)
+    register_engine("dbb", SmartBSDbbEngine)
     register_engine("trend_pullback", TrendPullbackSTEngine)
     register_engine("smart_money", SmartMoneySTEngine)
     register_engine("candle", CandlePatternSTEngine)
@@ -152,7 +147,7 @@ def _ensure_registered() -> None:
 
 BLEND_ENGINES: tuple[str, ...] = (
     "maribbon",
-    "bollinger",
+    "dbb",
     "trend_pullback",
     "smart_money",
     "candle",
@@ -160,10 +155,10 @@ BLEND_ENGINES: tuple[str, ...] = (
     "rsi_divergence",
 )
 
-# Production mean blend (matches Vanta live SmartBS v0.9.5+).
+# Production mean blend.
 ACTIVE_BLEND_ENGINES: tuple[str, ...] = (
     "maribbon",
-    "bollinger",
+    "dbb",
     "trend_pullback",
     "smart_money",
     "macd",

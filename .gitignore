@@ -3,6 +3,7 @@ __pycache__/
 .eggs/
 *.egg-info/
 smartbs_entry.egg-info/
+smartbs.egg-info/
 dist/
 build/
 .cache/
@@ -11,5 +12,9 @@ checkpoints/
 data_cache/
 *.pt
 *.pt.bak.*
+*.onnx
+*.onnx.data
+mql5/Models/**
+!mql5/Models/README.md
 .venv/
 venv/

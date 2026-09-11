@@ -1,8 +1,7 @@
 """SmartBS engines + equal-weight blend — modular ST feature engines + TCN AI.
 
-Standalone package (no Entry engine — see sibling ``smartbs_entry``; no Vanta
-miner / Risk Manager / hydrate). Compatible with existing per-engine ``.pt``
-checkpoints under ``{root}/{engine}/{PAIR}.pt``.
+Standalone package (no Entry engine; no Vanta miner / Risk Manager / hydrate).
+Train each engine independently; blend any subset; export ONNX for the EA.
 """
 
 from __future__ import annotations
