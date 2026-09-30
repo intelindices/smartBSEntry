@@ -1,40 +1,28 @@
-# MQL5 Expert Advisor — raw_ai shell
+# MQL5 Expert Advisor — pivot_engine (pivot_breakout)
 
-`Experts/SmartBSEntry.mq5` loads an ONNX TCN and prints **raw_ai** (`FLAT` / `LONG` / `SHORT`) on each closed H1 bar. It does **not** place orders or manage risk.
+`Experts/SmartBSEntry.mq5` loads `{asset}_pivot_engine.onnx` (12 channels).
 
-## Features (today)
+| | Rule (defaults) |
+|--|------|
+| **Engine** | `pivot_engine` (potential + OHLCV + trend + tod + cd + candle) |
+| **Labels** | trained with `pivot_breakout` pivot_len=5 |
+| **Signal** | argmax FLAT / LONG / SHORT (`raw_ai`) |
+| **Trade** | every H1 bar sync (`InpTradePolicy=bar`) |
+| **Gates / SL** | off |
 
-| Engine | Channels | MQL builder |
-|--------|----------|-------------|
-| `dbb` | 26 | `Include/SmartBSEntry/DbbFeatures.mqh` |
-
-Other ST engines (`maribbon`, `macd`, …) are trained in Python; MQL feature ports come later. Set `InpEngines=dbb` until then.
-
-## Bake a model
+Export:
 
 ```bash
-python -m smartbs_engines.train --trade-pair XAUUSD --data-source mt5 --feature-engine dbb
 python -m smartbs_engines.export_onnx \
-  --checkpoint smartbs_engines/checkpoints/dbb/XAUUSD.pt \
-  --out mql5/Models/XAUUSD_dbb.onnx
+  --checkpoint smartbs_engines/checkpoints_pivot_engine_core_pivot_breakout_p5_commodity_entryv2/pivot_engine/XAUUSD.pt \
+  --out mql5/Models/SmartBSEntry/XAUUSD_pivot_engine.onnx
 ```
 
-Copy `XAUUSD_dbb.onnx` (+ `.json` sidecar) to the terminal’s `MQL5/Files/SmartBSEntry/` (or set `InpOnnxFile`).
+Copy `mql5/Models/SmartBSEntry/*_pivot_engine.{onnx,json}` → terminal `MQL5/Files/SmartBSEntry/`.
 
-## Inputs
+### Strategy Tester
 
-- `InpOnnxFile` — path under `Files/` (blank → `SmartBSEntry\{ASSET}_dbb.onnx`)
-- `InpEngines` — comma list for future multi-ONNX mean blend (single `dbb` for now)
-- `InpSignalMode` — raw argmax or confidence threshold
-- `InpLookback` / `InpNumInputs` / `InpTemperature` — override sidecar JSON
-
-## Include layout
-
-```
-Include/SmartBSEntry/
-  Common.mqh       # OHLC copy
-  DbbFeatures.mqh  # 26ch dBB
-  OnnxModel.mqh    # ONNX runner (max 48×64)
-  Softmax.mqh
-  Indicators.mqh
-```
+1. MetaEditor: compile `SmartBSEntry.mq5` (F7).
+2. Tester: Expert = SmartBSEntry, Symbol = XAUUSD (or XAG/XTI/NATGAS/PLATINUM), Period = **H1**.
+3. Model: 1 minute OHLC or Open prices.
+4. Journal should show `pivot_engine` ready and class probs each bar.

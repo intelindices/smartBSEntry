@@ -87,12 +87,17 @@ def export_onnx(
         "onnx": str(out.resolve()),
         "trade_pair": cfg.get("trade_pair"),
         "feature_engine": cfg.get("feature_engine", "maribbon"),
+        "backbone": cfg.get("backbone", "tcn"),
+        "label_mode": cfg.get("label_mode"),
+        "pivot_len": cfg.get("pivot_len"),
+        "barrier_horizon": cfg.get("barrier_horizon"),
         "feature_spec_hash": cfg.get("feature_spec_hash"),
         "num_inputs": num_inputs,
         "lookback": lookback,
         "num_classes": int(cfg.get("num_classes", 3)),
         "temperature": temperature,
         "num_channels": list(cfg.get("num_channels") or []),
+        "kernel_size": cfg.get("kernel_size"),
         "opset": int(opset),
     }
     sidecar = out.with_suffix(".json")

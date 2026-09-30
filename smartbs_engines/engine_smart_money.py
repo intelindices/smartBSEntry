@@ -1,12 +1,11 @@
-"""SmartMoneySTEngine v2 — 1h mean-reversion context + 15m structure.
+"""SmartMoneySTEngine — 1h mean-reversion context + 15m structure.
 
-22 channels:
-  - 1h: dealing-range MR, swing bias, fused setup scores
-  - 15m: BOS/ChoCH decay, FVG proximity, sweeps (end-of-hour snapshot onto 1h)
+20 channels:
+  - 1h: dealing-range MR (incl. mr_stretch), swing bias, fused setup scores (8)
+  - 15m: BOS/ChoCH decay, FVG size/dist, sweeps (12)
 
-When 15m data is unavailable (tests, missing cache), 15m channels fall back to
-structure computed on 1h with a shorter swing length so train/live paths stay
-compatible.
+``discount``/``premium``/``fvg_prox_*`` stay internal for setup scores
+(``fvg_prox`` is monotone of |dist_fvg|; discount/premium fold into stretch).
 """
 
 from __future__ import annotations
@@ -16,15 +15,16 @@ import pandas as pd
 
 from smartbs_engines.smart_money_structure import (
     compute_structure_block,
+    is_15m_bars,
     load_aligned_15m,
     map_15m_end_of_hour_to_1h,
     prev_array,
 )
-from smartbs_engines.registry import BaseSTEngine, EngineResult, safe_div
+from smartbs_engines.registry import BaseSTEngine, EngineResult, atr_unit, safe_div
 from smartbs_engines.structure import atr as _atr, swing_levels
 
 SWING_LEN_1H = 9
-SWING_LEN_15M = 5
+SWING_LEN_15M = 9
 RANGE_WINDOW = 50
 DECAY_CAP = 50
 
@@ -34,8 +34,6 @@ MR_CHANNELS: tuple[str, ...] = (
     "mr_stretch",
     "dist_sh",
     "dist_sl",
-    "discount",
-    "premium",
     "setup_long",
     "setup_short",
     "bars_since_sh",
@@ -96,8 +94,8 @@ def _mr_block(
         "struct_bias": struct_bias,
         "range_pos": range_pos,
         "mr_stretch": mr_stretch,
-        "dist_sh": safe_div(close - sh, atr14),
-        "dist_sl": safe_div(close - sl, atr14),
+        "dist_sh": atr_unit(close - sh, atr14, k=3.0),
+        "dist_sl": atr_unit(close - sl, atr14, k=3.0),
         "discount": discount,
         "premium": premium,
         "bars_since_sh": _bars_since_level_change(sh),
@@ -138,24 +136,30 @@ class SmartMoneySTEngine(BaseSTEngine):
 
         mr = _mr_block(high=high, low=low, close=close, atr14=atr14)
 
-        if df_15m is None and symbol:
-            df_15m = load_aligned_15m(df, symbol=symbol, data_source=data_source)
-
-        if df_15m is not None and len(df_15m) >= SWING_LEN_15M * 3:
-            h15 = df_15m["high"].to_numpy(dtype=np.float64)
-            l15 = df_15m["low"].to_numpy(dtype=np.float64)
-            c15 = df_15m["close"].to_numpy(dtype=np.float64)
-            atr15 = _atr(h15, l15, c15, 14)
+        if is_15m_bars(df):
             block15 = compute_structure_block(
-                high=h15, low=l15, close=c15, atr14=atr15, swing_len=SWING_LEN_15M
+                high=high, low=low, close=close, atr14=atr14, swing_len=SWING_LEN_15M
             )
-            mapped = _map_m15_to_1h(times_1h, df_15m, block15)
-            m15 = {f"m15_{k}": v for k, v in mapped.items()}
+            m15 = {f"m15_{k}": v for k, v in block15.items()}
         else:
-            block_fb = compute_structure_block(
-                high=high, low=low, close=close, atr14=atr14, swing_len=SWING_LEN_1H
-            )
-            m15 = {f"m15_{k}": v for k, v in block_fb.items()}
+            if df_15m is None and symbol:
+                df_15m = load_aligned_15m(df, symbol=symbol, data_source=data_source)
+
+            if df_15m is not None and len(df_15m) >= SWING_LEN_15M * 3:
+                h15 = df_15m["high"].to_numpy(dtype=np.float64)
+                l15 = df_15m["low"].to_numpy(dtype=np.float64)
+                c15 = df_15m["close"].to_numpy(dtype=np.float64)
+                atr15 = _atr(h15, l15, c15, 14)
+                block15 = compute_structure_block(
+                    high=h15, low=l15, close=c15, atr14=atr15, swing_len=SWING_LEN_15M
+                )
+                mapped = _map_m15_to_1h(times_1h, df_15m, block15)
+                m15 = {f"m15_{k}": v for k, v in mapped.items()}
+            else:
+                block_fb = compute_structure_block(
+                    high=high, low=low, close=close, atr14=atr14, swing_len=SWING_LEN_1H
+                )
+                m15 = {f"m15_{k}": v for k, v in block_fb.items()}
 
         setup_long = np.clip(
             m15["m15_choch_up_decay"] * mr["discount"] * m15["m15_fvg_prox_up"],

@@ -1,6 +1,7 @@
 //+------------------------------------------------------------------+
-//| SmartBS dBB — double Bollinger occupancy (1h + M15), 26 channels |
+//| SmartBS dBB — close-zone packs (1h + M15), 12 channels           |
 //| Parity with smartbs_engines/engine_dbb.py                        |
+//| Per TF: body_peak_zone + 5 close-in one-hots                     |
 //+------------------------------------------------------------------+
 #ifndef SMARTBS_DBB_FEATURES_MQH
 #define SMARTBS_DBB_FEATURES_MQH
@@ -8,12 +9,13 @@
 #include "Indicators.mqh"
 #include "Common.mqh"
 
-#define SB_NUM_INPUTS      26
+#define SB_DBB_CH          12
+#define SB_NUM_INPUTS      SB_DBB_CH
 #define SB_DBB_BB_LEN      20
 #define SB_DBB_MULT1       1.0
 #define SB_DBB_MULT2       2.0
 #define SB_DBB_WARMUP      256
-#define SB_DBB_PACK        13
+#define SB_DBB_PACK        6
 #define SB_M15_SEC         900
 
 double SB_FracOverlap(const double seg_lo, const double seg_hi,
@@ -30,10 +32,10 @@ double SB_FracOverlap(const double seg_lo, const double seg_hi,
    return overlap / length;
   }
 
-void SB_DbbPack13(const double &open[], const double &high[],
-                  const double &low[], const double &close[],
-                  const int bb_len, const double mult1, const double mult2,
-                  double &out[][SB_DBB_PACK])
+void SB_DbbPack6(const double &open[], const double &high[],
+                 const double &low[], const double &close[],
+                 const int bb_len, const double mult1, const double mult2,
+                 double &out[][SB_DBB_PACK])
   {
    int n = ArraySize(close);
    ArrayResize(out, n);
@@ -61,26 +63,17 @@ void SB_DbbPack13(const double &open[], const double &high[],
 
       double blo = MathMin(open[i], close[i]);
       double bhi = MathMax(open[i], close[i]);
-      double body[6];
+      double body[5];
       body[0] = SB_FracOverlap(blo, bhi, upper2, 1.0e100);
       body[1] = SB_FracOverlap(blo, bhi, upper1, upper2);
-      body[2] = SB_FracOverlap(blo, bhi, b, upper1);
-      body[3] = SB_FracOverlap(blo, bhi, lower1, b);
-      body[4] = SB_FracOverlap(blo, bhi, lower2, lower1);
-      body[5] = SB_FracOverlap(blo, bhi, -1.0e100, lower2);
+      body[2] = SB_FracOverlap(blo, bhi, lower1, upper1);
+      body[3] = SB_FracOverlap(blo, bhi, lower2, lower1);
+      body[4] = SB_FracOverlap(blo, bhi, -1.0e100, lower2);
 
-      double rng[6];
-      rng[0] = SB_FracOverlap(low[i], high[i], upper2, 1.0e100);
-      rng[1] = SB_FracOverlap(low[i], high[i], upper1, upper2);
-      rng[2] = SB_FracOverlap(low[i], high[i], b, upper1);
-      rng[3] = SB_FracOverlap(low[i], high[i], lower1, b);
-      rng[4] = SB_FracOverlap(low[i], high[i], lower2, lower1);
-      rng[5] = SB_FracOverlap(low[i], high[i], -1.0e100, lower2);
-
-      double codes[6] = {3.0, 2.0, 1.0, -1.0, -2.0, -3.0};
+      double codes[5] = {2.0, 1.0, 0.0, -1.0, -2.0};
       int peak = 0;
       double best = body[0];
-      for(int z = 1; z < 6; z++)
+      for(int z = 1; z < 5; z++)
         {
          if(body[z] > best)
            {
@@ -90,11 +83,25 @@ void SB_DbbPack13(const double &open[], const double &high[],
         }
       double peak_code = (best > 0.0) ? codes[peak] : 0.0;
 
-      for(int z = 0; z < 6; z++)
-         out[i][z] = body[z];
-      for(int z = 0; z < 6; z++)
-         out[i][6 + z] = rng[z];
-      out[i][12] = peak_code;
+      double c = close[i];
+      double close_oh[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+      if(MathIsValidNumber(c))
+        {
+         if(c >= upper2)
+            close_oh[0] = 1.0;
+         else if(c >= upper1)
+            close_oh[1] = 1.0;
+         else if(c >= lower1)
+            close_oh[2] = 1.0;
+         else if(c >= lower2)
+            close_oh[3] = 1.0;
+         else
+            close_oh[4] = 1.0;
+        }
+
+      out[i][0] = peak_code;
+      for(int z = 0; z < 5; z++)
+         out[i][1 + z] = close_oh[z];
      }
   }
 
@@ -136,10 +143,10 @@ bool SB_BuildDbbFeatureMatrix(const string symbol, double &features[][SB_NUM_INP
    double pack1h[][SB_DBB_PACK];
    double pack15[][SB_DBB_PACK];
    double map15[][SB_DBB_PACK];
-   SB_DbbPack13(h1.open, h1.high, h1.low, h1.close,
-                SB_DBB_BB_LEN, SB_DBB_MULT1, SB_DBB_MULT2, pack1h);
-   SB_DbbPack13(m15.open, m15.high, m15.low, m15.close,
-                SB_DBB_BB_LEN, SB_DBB_MULT1, SB_DBB_MULT2, pack15);
+   SB_DbbPack6(h1.open, h1.high, h1.low, h1.close,
+               SB_DBB_BB_LEN, SB_DBB_MULT1, SB_DBB_MULT2, pack1h);
+   SB_DbbPack6(m15.open, m15.high, m15.low, m15.close,
+               SB_DBB_BB_LEN, SB_DBB_MULT1, SB_DBB_MULT2, pack15);
    SB_MapLastCompletedM15(h1, m15, pack15, map15);
 
    n_bars = h1.n;

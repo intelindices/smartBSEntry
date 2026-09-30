@@ -1,13 +1,7 @@
-"""MACDSTEngine v2 — EMA stack trend + MACD histogram timing.
+"""MACDSTEngine — EMA stack trend + MACD histogram timing.
 
-16 channels: classic 12/26 EMA geometry (8) plus a single 12/26/9 MACD block (8).
-Slow 5/35 stack is kept as context only; the duplicate fast MACD config is dropped.
-
-v2 geometry:
-  - ``stack_12_26`` / ``stack_5_35`` = clipped (fast − slow) / ATR.
-  - ``close_vs_stack`` = soft price position vs both EMAs.
-  - ``bull_soft`` = tanh((macd − signal) / ATR); cross decays replace 0/1 flags.
-  - ``hist_z`` / ``hist_persist`` = regime, not one-bar crosses.
+13 channels: classic 12/26 EMA geometry (8) plus a slim MACD block (5).
+Dropped ``hist_atr``, ``bull_soft``, ``macd_zero_dist`` (overlap with hist_z / persist).
 """
 
 from __future__ import annotations
@@ -15,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from smartbs_engines.registry import BaseSTEngine, EngineResult, safe_div, slope_norm
+from smartbs_engines.registry import BaseSTEngine, EngineResult, atr_unit, safe_div, slope_unit
 from smartbs_engines.structure import atr as _atr, ema as _ema
 
 EMA_FAST = 12
@@ -24,6 +18,7 @@ EMA_SIGNAL = 9
 EMA_CTX_FAST = 5
 EMA_CTX_SLOW = 35
 STACK_CLIP = 2.0
+SLOPE_CLIP = 2.0
 HIST_Z_WINDOW = 50
 HIST_PERSIST_WINDOW = 10
 CROSS_DECAY_CAP = 20
@@ -41,19 +36,12 @@ EMA_CHANNELS: tuple[str, ...] = (
 )
 
 MACD_CHANNELS: tuple[str, ...] = (
-    "hist_atr",
     "hist_z",
     "hist_slope",
-    "bull_soft",
     "hist_persist",
-    "macd_zero_dist",
     "cross_up_decay",
     "cross_dn_decay",
 )
-
-
-def _clip_stack(x: np.ndarray) -> np.ndarray:
-    return np.clip(np.nan_to_num(x, nan=0.0), -STACK_CLIP, STACK_CLIP)
 
 
 def _prev(a: np.ndarray) -> np.ndarray:
@@ -107,31 +95,28 @@ class MACDSTEngine(BaseSTEngine):
         cross_up = bull & ~_prev(bull)
         cross_dn = ~bull & _prev(bull)
 
-        dist_fast = safe_div(close - ema12, atr14)
-        dist_slow = safe_div(close - ema26, atr14)
-        close_vs_stack = np.clip(0.5 * (dist_fast + dist_slow), -STACK_CLIP, STACK_CLIP)
+        dist_fast = atr_unit(close - ema12, atr14, k=STACK_CLIP)
+        dist_slow = atr_unit(close - ema26, atr14, k=STACK_CLIP)
+        close_vs_stack = 0.5 * (dist_fast + dist_slow)
 
         ema_cols = [
-            _clip_stack(safe_div(stack, atr14)),
+            atr_unit(stack, atr14, k=STACK_CLIP),
             dist_fast,
             dist_slow,
-            slope_norm(ema12, atr14),
-            slope_norm(ema26, atr14),
-            slope_norm(stack, atr14),
+            slope_unit(ema12, atr14, k=SLOPE_CLIP),
+            slope_unit(ema26, atr14, k=SLOPE_CLIP),
+            slope_unit(stack, atr14, k=SLOPE_CLIP),
             close_vs_stack,
-            _clip_stack(safe_div(ema5 - ema35, atr14)),
+            atr_unit(ema5 - ema35, atr14, k=STACK_CLIP),
         ]
 
         macd_cols = [
-            safe_div(hist, atr14),
             _hist_zscore(hist, HIST_Z_WINDOW),
-            slope_norm(hist, atr14),
-            np.tanh(safe_div(macd_line - signal_line, atr14)),
+            slope_unit(hist, atr14, k=SLOPE_CLIP),
             pd.Series(np.sign(hist))
             .rolling(HIST_PERSIST_WINDOW, min_periods=1)
             .mean()
             .to_numpy(dtype=np.float64),
-            safe_div(macd_line, atr14),
             _bars_since_flag(cross_up.astype(np.float64)),
             _bars_since_flag(cross_dn.astype(np.float64)),
         ]

@@ -1,0 +1,369 @@
+//@version=5
+// smartBS Signals — TradingView debug overlay matched to Python signal layer.
+// Engines: maribbon, dbb, rsi_divergence, trend_pullback, smart_money, macd
+// (no candle). Chart: use 1H for engine parity. Smart-money structure is
+// computed on 15m (swing=9) then shown on the chart TF.
+indicator("smartBS Signals", overlay=true, max_bars_back=5000)
+
+// ═══════════════════════════════════════════════════════════════════════
+// Inputs
+// ═══════════════════════════════════════════════════════════════════════
+grpShow = "Signal engines"
+showMR   = input.bool(true, "maribbon_*", group=grpShow)
+showDBB  = input.bool(true, "dbb_*", group=grpShow)
+showRSI  = input.bool(true, "rsi_divergence_*", group=grpShow)
+showTP   = input.bool(true, "trend_pullback_*", group=grpShow)
+showSM   = input.bool(true, "smart_money_*", group=grpShow)
+showMACD = input.bool(true, "macd_*", group=grpShow)
+
+grpMark = "Marks (turning points)"
+markTurnsOnly = input.bool(true, "Turning points only (ChoCH / RSI div-rev / MACD)", group=grpMark)
+markMin = input.float(0.35, "Min strength (extra marks mode)", minval=0.05, maxval=1.0, step=0.05, group=grpMark)
+
+grpPlot = "Helper plots"
+plotMR   = input.bool(true, "Plot maribbon EMAs", group=grpPlot)
+plotDBB  = input.bool(false, "Plot dBB bands", group=grpPlot)
+plotTPEma = input.bool(false, "Plot TP EMA 20/50/200", group=grpPlot)
+plotSmLvl = input.bool(false, "Plot SM 15m swing levels (mapped)", group=grpPlot)
+plotRegime = input.bool(true, "Plot fast/mid regime background", group=grpPlot)
+plotRegimeMa = input.bool(true, "Plot 4MA regime lines", group=grpPlot)
+regimeTrans = input.int(92, "Regime bg transparency", minval=70, maxval=98, step=1, group=grpPlot)
+
+// Const colors only — input.color doubles every plot*/plotshape toward the 64 limit.
+colLong  = #26A69A
+colShort = #EF5350
+colMr9   = #81D4FA
+colMr14  = #4FC3F7
+colMr24  = #29B6F6
+colMr40  = #26A69A
+colMr60  = #66BB6A
+colMr100 = #FFA726
+colMr160 = #FF7043
+colMr240 = #EF5350
+
+// Fixed to Python constants (exposed for audit only)
+grpConst = "Python constants (parity)"
+SWING_1H = input.int(9, "SM 1h swing (MR only)", group=grpConst)
+SWING_15 = input.int(9, "SM 15m structure swing", group=grpConst)
+DECAY_SM = input.int(50, "SM decay cap", group=grpConst)
+DECAY_RSI = input.int(24, "RSI event decay cap", group=grpConst)
+DECAY_MACD = input.int(20, "MACD cross decay cap", group=grpConst)
+RANGE_W = input.int(50, "Range window", group=grpConst)
+DBB_LEN = input.int(20, "dBB length", group=grpConst)
+DBB_M1 = input.float(1.0, "dBB inner mult", group=grpConst)
+DBB_M2 = input.float(2.0, "dBB outer mult", group=grpConst)
+RSI_LEN = input.int(14, "RSI length", group=grpConst)
+RSI_OS = input.float(30.0, "RSI OS", group=grpConst)
+RSI_OB = input.float(70.0, "RSI OB", group=grpConst)
+RSI_SWING = input.int(5, "RSI div pivot L/R (pH/pL)", group=grpConst)
+TP_SETUP = input.float(0.5, "trend_pullback setup mark thr", group=grpConst)
+
+tfM15 = "15"
+
+// ═══════════════════════════════════════════════════════════════════════
+// Helpers (match Python)
+// ═══════════════════════════════════════════════════════════════════════
+f_clip(float x, float lo, float hi) => math.max(lo, math.min(hi, x))
+f_clip01(float x) => f_clip(x, 0.0, 1.0)
+f_tanh(float x) =>
+    float z = f_clip(x, -20.0, 20.0)
+    float e2 = math.exp(2.0 * z)
+    (e2 - 1.0) / (e2 + 1.0)
+
+f_decay(bool evt, float prev, int cap) =>
+    evt ? 1.0 : math.max(0.0, prev - 1.0 / float(cap))
+
+f_rising(float v) => v > nz(v[1], 0.0)
+f_onset(float strength) => strength >= 0.99 and nz(strength[1], 0.0) < 0.99
+f_cross_on(float strength) => strength >= markMin and nz(strength[1], 0.0) < markMin
+f_fire(float strength) => markTurnsOnly ? f_onset(strength) : f_cross_on(strength)
+
+atr14 = ta.atr(14)
+
+f_structure(int swingLen, int decayCap) =>
+    float ph = ta.pivothigh(high, swingLen, swingLen)
+    float pl = ta.pivotlow(low, swingLen, swingLen)
+    var float sh = na
+    var float sl = na
+    if not na(ph)
+        sh := ph
+    if not na(pl)
+        sl := pl
+    float pSh = sh[1]
+    float pSl = sl[1]
+    bool brokeUp = not na(pSh) and close > pSh
+    bool brokeDn = not na(pSl) and close < pSl
+    bool newBosUp = brokeUp and not brokeUp[1]
+    bool newBosDn = brokeDn and not brokeDn[1]
+    bool chochUp = newBosUp and brokeDn[1]
+    bool chochDn = newBosDn and brokeUp[1]
+    bool bosUp = newBosUp and not chochUp
+    bool bosDn = newBosDn and not chochDn
+    float atr14 = ta.atr(14)
+    float sweepUp = f_clip((high - nz(pSh, high)) / atr14, 0.0, 3.0) * (close <= nz(pSh, high) ? 1.0 : 0.0)
+    float sweepDn = f_clip((nz(pSl, low) - low) / atr14, 0.0, 3.0) * (close >= nz(pSl, low) ? 1.0 : 0.0)
+    float fvgUp = math.max(low - high[2], 0.0)
+    float fvgDn = math.max(low[2] - high, 0.0)
+    float fvgUpSz = fvgUp / atr14
+    float fvgDnSz = fvgDn / atr14
+    float distFvgUp = fvgUp > 0 ? (close - high[2]) / atr14 : (close - low) / atr14
+    float distFvgDn = fvgDn > 0 ? (low[2] - close) / atr14 : (high - close) / atr14
+    distFvgUp := f_clip(distFvgUp, -3.0, 3.0)
+    distFvgDn := f_clip(distFvgDn, -3.0, 3.0)
+    float fvgProxUp = f_clip(1.0 - math.abs(distFvgUp) / 2.0, 0.0, 1.0) * (fvgUpSz > 0 ? 1.0 : 0.0)
+    float fvgProxDn = f_clip(1.0 - math.abs(distFvgDn) / 2.0, 0.0, 1.0) * (fvgDnSz > 0 ? 1.0 : 0.0)
+
+    var float chochUpDec = 0.0
+    var float chochDnDec = 0.0
+    var float bosUpDec = 0.0
+    var float bosDnDec = 0.0
+    chochUpDec := f_decay(chochUp, chochUpDec[1], decayCap)
+    chochDnDec := f_decay(chochDn, chochDnDec[1], decayCap)
+    bosUpDec := f_decay(bosUp, bosUpDec[1], decayCap)
+    bosDnDec := f_decay(bosDn, bosDnDec[1], decayCap)
+    [chochUp, chochDn, bosUp, bosDn, chochUpDec, chochDnDec, bosUpDec, bosDnDec, sweepUp, sweepDn, fvgProxUp, fvgProxDn, sh, sl]
+
+// ═══════════════════════════════════════════════════════════════════════
+// 1) maribbon_*
+// ═══════════════════════════════════════════════════════════════════════
+mr9 = ta.ema(close, 9)
+mr14 = ta.ema(close, 14)
+mr24 = ta.ema(close, 24)
+mr40 = ta.ema(close, 40)
+mr60 = ta.ema(close, 60)
+mr100 = ta.ema(close, 100)
+mr160 = ta.ema(close, 160)
+mr240 = ta.ema(close, 240)
+f_dir(float ema) => f_clip((close - ema) / atr14, -2.0, 2.0)
+dirSum = f_dir(mr9) + f_dir(mr14) + f_dir(mr24) + f_dir(mr40) + f_dir(mr60) + f_dir(mr100) + f_dir(mr160) + f_dir(mr240)
+maribbon_fan_bull = f_clip01(dirSum / 16.0)
+maribbon_fan_bear = f_clip01((-dirSum) / 16.0)
+rsiN = ta.rsi(close, 14) / 100.0
+rsi = ta.rsi(close, 14)
+rsi_to_band = rsi < 30 ? (30 - rsi) / 20.0 : rsi > 70 ? (rsi - 70) / 20.0 : 0.0
+maribbon_rsi_overbought = f_clip01(math.max(rsi_to_band, 0.0) * (rsiN > 0.5 ? 1.0 : 0.0))
+maribbon_rsi_oversold = f_clip01(math.max(rsi_to_band, 0.0) * (rsiN < 0.5 ? 1.0 : 0.0))
+maribbon_long = maribbon_fan_bull
+maribbon_short = maribbon_fan_bear
+
+// Fan: short EMAs cooler → long EMAs warmer (visual ribbon).
+plot(plotMR and showMR ? mr9 : na, "MR EMA9", color=colMr9, linewidth=1)
+plot(plotMR and showMR ? mr14 : na, "MR EMA14", color=colMr14, linewidth=1)
+plot(plotMR and showMR ? mr24 : na, "MR EMA24", color=colMr24, linewidth=1)
+plot(plotMR and showMR ? mr40 : na, "MR EMA40", color=colMr40, linewidth=1)
+plot(plotMR and showMR ? mr60 : na, "MR EMA60", color=colMr60, linewidth=1)
+plot(plotMR and showMR ? mr100 : na, "MR EMA100", color=colMr100, linewidth=1)
+plot(plotMR and showMR ? mr160 : na, "MR EMA160", color=colMr160, linewidth=1)
+plot(plotMR and showMR ? mr240 : na, "MR EMA240", color=colMr240, linewidth=2)
+
+plotshape(not markTurnsOnly and showMR and f_cross_on(maribbon_long), title="maribbon_long", style=shape.diamond, location=location.belowbar, color=colLong, size=size.tiny, text="M", textcolor=color.white)
+plotshape(not markTurnsOnly and showMR and f_cross_on(maribbon_short), title="maribbon_short", style=shape.diamond, location=location.abovebar, color=colShort, size=size.tiny, text="M", textcolor=color.white)
+
+// ═══════════════════════════════════════════════════════════════════════
+// 2) dbb_*
+// ═══════════════════════════════════════════════════════════════════════
+basis = ta.sma(close, DBB_LEN)
+sd = ta.stdev(close, DBB_LEN)
+up1 = basis + DBB_M1 * sd
+lo1 = basis - DBB_M1 * sd
+up2 = basis + DBB_M2 * sd
+lo2 = basis - DBB_M2 * sd
+dbb_upper_outer = close >= up2 ? 1.0 : 0.0
+dbb_lower_outer = close <= lo2 ? 1.0 : 0.0
+dbb_long = dbb_lower_outer
+dbb_short = dbb_upper_outer
+
+pUp2 = plot(plotDBB and showDBB ? up2 : na, "dBB outer+", color=colShort)
+pUp1 = plot(plotDBB and showDBB ? up1 : na, "dBB inner+", color=colShort)
+plot(plotDBB and showDBB ? basis : na, "dBB mid", color=color.gray)
+pLo1 = plot(plotDBB and showDBB ? lo1 : na, "dBB inner-", color=colLong)
+pLo2 = plot(plotDBB and showDBB ? lo2 : na, "dBB outer-", color=colLong)
+fill(pUp2, pUp1, color=color.new(colShort, 92))
+fill(pLo1, pLo2, color=color.new(colLong, 92))
+
+plotshape(not markTurnsOnly and showDBB and f_cross_on(dbb_long), title="dbb_long", style=shape.xcross, location=location.belowbar, color=colLong, size=size.tiny, text="B", textcolor=color.white)
+plotshape(not markTurnsOnly and showDBB and f_cross_on(dbb_short), title="dbb_short", style=shape.xcross, location=location.abovebar, color=colShort, size=size.tiny, text="B", textcolor=color.white)
+
+// ═══════════════════════════════════════════════════════════════════════
+// 3) rsi_divergence_*
+// ═══════════════════════════════════════════════════════════════════════
+rsiMaj = ta.rsi(close, RSI_LEN)
+ema20 = ta.ema(close, 20)
+ema50 = ta.ema(close, 50)
+upTrend = ema20 > ema50
+dnTrend = ema20 < ema50
+majXup = ta.crossover(rsiMaj, RSI_OS)
+majXdn = ta.crossunder(rsiMaj, RSI_OB)
+majInBand = rsiMaj > RSI_OS and rsiMaj < RSI_OB
+
+rsiMin = request.security(syminfo.tickerid, tfM15, ta.rsi(close, RSI_LEN), barmerge.gaps_off, barmerge.lookahead_off)
+minXup = ta.crossover(rsiMin, RSI_OS)
+minXdn = ta.crossunder(rsiMin, RSI_OB)
+
+cont_long_evt = upTrend and majInBand and minXup
+cont_short_evt = dnTrend and majInBand and minXdn
+sim_up = majXup and minXup
+sim_dn = majXdn and minXdn
+rev_long_evt = sim_up and dnTrend
+rev_short_evt = sim_dn and upTrend
+
+var float rsi_divergence_cont_long = 0.0
+var float rsi_divergence_cont_short = 0.0
+var float rsi_divergence_rev_long = 0.0
+var float rsi_divergence_rev_short = 0.0
+var float rsi_divergence_sim_long = 0.0
+var float rsi_divergence_sim_short = 0.0
+rsi_divergence_cont_long := f_decay(cont_long_evt, rsi_divergence_cont_long[1], DECAY_RSI)
+rsi_divergence_cont_short := f_decay(cont_short_evt, rsi_divergence_cont_short[1], DECAY_RSI)
+rsi_divergence_rev_long := f_decay(rev_long_evt, rsi_divergence_rev_long[1], DECAY_RSI)
+rsi_divergence_rev_short := f_decay(rev_short_evt, rsi_divergence_rev_short[1], DECAY_RSI)
+rsi_divergence_sim_long := f_decay(sim_up, rsi_divergence_sim_long[1], DECAY_RSI)
+rsi_divergence_sim_short := f_decay(sim_dn, rsi_divergence_sim_short[1], DECAY_RSI)
+
+ph = ta.pivothigh(high, RSI_SWING, RSI_SWING)
+pl = ta.pivotlow(low, RSI_SWING, RSI_SWING)
+var float prevPxHi = na
+var float prevRsiHi = na
+var float prevPxLo = na
+var float prevRsiLo = na
+bull_div_evt = false
+bear_div_evt = false
+if not na(ph)
+    float pxH = high[RSI_SWING]
+    float rH = rsiMaj[RSI_SWING]
+    if not na(prevPxHi)
+        bear_div_evt := pxH > prevPxHi and rH < prevRsiHi
+    prevPxHi := pxH
+    prevRsiHi := rH
+if not na(pl)
+    float pxL = low[RSI_SWING]
+    float rL = rsiMaj[RSI_SWING]
+    if not na(prevPxLo)
+        bull_div_evt := pxL < prevPxLo and rL > prevRsiLo
+    prevPxLo := pxL
+    prevRsiLo := rL
+var float rsi_divergence_bull_div = 0.0
+var float rsi_divergence_bear_div = 0.0
+rsi_divergence_bull_div := f_decay(bull_div_evt, rsi_divergence_bull_div[1], DECAY_RSI)
+rsi_divergence_bear_div := f_decay(bear_div_evt, rsi_divergence_bear_div[1], DECAY_RSI)
+rsi_divergence_long = math.max(math.max(rsi_divergence_cont_long, rsi_divergence_rev_long), math.max(rsi_divergence_bull_div, rsi_divergence_sim_long))
+rsi_divergence_short = math.max(math.max(rsi_divergence_cont_short, rsi_divergence_rev_short), math.max(rsi_divergence_bear_div, rsi_divergence_sim_short))
+
+plotshape(not markTurnsOnly and showRSI and f_onset(rsi_divergence_cont_long), title="rsi_divergence_cont_long", style=shape.triangleup, location=location.belowbar, color=colLong, size=size.tiny, text="C", textcolor=color.white)
+plotshape(not markTurnsOnly and showRSI and f_onset(rsi_divergence_cont_short), title="rsi_divergence_cont_short", style=shape.triangledown, location=location.abovebar, color=colShort, size=size.tiny, text="C", textcolor=color.white)
+plotshape(showRSI and (markTurnsOnly ? rev_long_evt : f_onset(rsi_divergence_rev_long)), title="rsi_divergence_rev_long", style=shape.triangleup, location=location.belowbar, color=colLong, size=size.tiny, text="R", textcolor=color.white)
+plotshape(showRSI and (markTurnsOnly ? rev_short_evt : f_onset(rsi_divergence_rev_short)), title="rsi_divergence_rev_short", style=shape.triangledown, location=location.abovebar, color=colShort, size=size.tiny, text="R", textcolor=color.white)
+plotshape(showRSI and (markTurnsOnly ? bull_div_evt : f_onset(rsi_divergence_bull_div)), title="rsi_divergence_bull_div", style=shape.diamond, location=location.belowbar, color=colLong, size=size.tiny, text="D", textcolor=color.white)
+plotshape(showRSI and (markTurnsOnly ? bear_div_evt : f_onset(rsi_divergence_bear_div)), title="rsi_divergence_bear_div", style=shape.diamond, location=location.abovebar, color=colShort, size=size.tiny, text="D", textcolor=color.white)
+
+// ═══════════════════════════════════════════════════════════════════════
+// 4) trend_pullback_*
+// ═══════════════════════════════════════════════════════════════════════
+ema200 = ta.ema(close, 200)
+stackFM = f_clip((ema20 - ema50) / atr14, -2.0, 2.0)
+stackMS = f_clip((ema50 - ema200) / atr14, -2.0, 2.0)
+stackSum = stackFM + stackMS
+trendUp = ema20 > ema50 and ema50 > ema200
+trendDn = ema20 < ema50 and ema50 < ema200
+
+// Regime: fast/mid + close vs mid (slow/long lines optional).
+maFast = ta.ema(close, 14)
+maMid = ta.ema(close, 48)
+maSlow = ta.ema(close, 120)
+maLong = ta.sma(close, 180)
+regimeUp = maFast > maMid and close > maMid
+regimeDn = maFast < maMid and close < maMid
+color regimeBg = not plotRegime ? na : regimeUp ? color.new(colLong, regimeTrans) : regimeDn ? color.new(colShort, regimeTrans) : color.new(color.gray, regimeTrans)
+bgcolor(regimeBg, title="fast/mid regime")
+plot(plotRegimeMa ? maFast : na, "regime fast EMA14", color=#81D4FA, linewidth=1)
+plot(plotRegimeMa ? maMid : na, "regime mid EMA48", color=#26A69A, linewidth=1)
+plot(plotRegimeMa ? maSlow : na, "regime slow EMA120", color=#FFA726, linewidth=1)
+plot(plotRegimeMa ? maLong : na, "regime long SMA180", color=#EF5350, linewidth=2)
+
+runMax = ta.highest(high, 20)
+runMin = ta.lowest(low, 20)
+rng20 = math.max(runMax - runMin, atr14 * 1e-6)
+depth = trendUp ? (runMax - close) : trendDn ? (close - runMin) : 0.0
+retrace20 = f_clip(depth / rng20, 0.0, 1.5)
+bullSetup = f_clip(stackSum, 0.0, 2.0) / 2.0
+bearSetup = f_clip(-stackSum, 0.0, 2.0) / 2.0
+trend_pullback_setup_long = f_clip01(f_clip(retrace20 * bullSetup, 0.0, 1.5) / 1.5)
+trend_pullback_setup_short = f_clip01(f_clip(retrace20 * bearSetup, 0.0, 1.5) / 1.5)
+trend_pullback_long = trend_pullback_setup_long
+trend_pullback_short = trend_pullback_setup_short
+
+plot(plotTPEma and showTP ? ema20 : na, "TP EMA20", color=color.yellow)
+plot(plotTPEma and showTP ? ema50 : na, "TP EMA50", color=color.orange)
+plot(plotTPEma and showTP ? ema200 : na, "TP EMA200", color=color.white, linewidth=2)
+
+plotshape(not markTurnsOnly and showTP and trend_pullback_long >= TP_SETUP and f_cross_on(trend_pullback_long), title="trend_pullback_long", style=shape.circle, location=location.belowbar, color=colLong, size=size.tiny, text="T", textcolor=color.white)
+plotshape(not markTurnsOnly and showTP and trend_pullback_short >= TP_SETUP and f_cross_on(trend_pullback_short), title="trend_pullback_short", style=shape.circle, location=location.abovebar, color=colShort, size=size.tiny, text="T", textcolor=color.white)
+
+// ═══════════════════════════════════════════════════════════════════════
+// 5) smart_money_*  — STRUCTURE ON 15m, mapped to chart TF
+//
+// Python: ChoCH/BOS computed on 15m → decay(50) → end-of-hour snapshot to 1h.
+// On a 1H chart, request.security only samples the last 15m bar of each hour,
+// so the raw one-bar bool chochUp15 is almost never true (event mid-hour lost).
+// Marks therefore use decay *rise* on the chart TF (same info Python keeps).
+// ═══════════════════════════════════════════════════════════════════════
+[chochUp15, chochDn15, bosUp15, bosDn15, chochUpDec15, chochDnDec15, bosUpDec15, bosDnDec15, sweepUp15, sweepDn15, fvgProxUp15, fvgProxDn15, sh15, sl15] =
+     request.security(syminfo.tickerid, tfM15, f_structure(SWING_15, DECAY_SM), barmerge.gaps_off, barmerge.lookahead_off)
+
+smart_money_choch_up = f_clip01(chochUpDec15)
+smart_money_choch_dn = f_clip01(chochDnDec15)
+smart_money_bos_up = f_clip01(bosUpDec15)
+smart_money_bos_dn = f_clip01(bosDnDec15)
+smart_money_sweep_up = f_clip01(sweepUp15 / 3.0)
+smart_money_sweep_dn = f_clip01(sweepDn15 / 3.0)
+
+// Decay rose vs prior chart bar → a fresh 15m event landed in this HTF bucket.
+// (Raw chochUp15 bool is unreliable on 1H; keep it as OR for native 15m charts.)
+f_decay_fire(float d) =>
+    d >= 0.70 and d > nz(d[1], 0.0) + 0.05
+
+chochUpFire = chochUp15 or f_decay_fire(smart_money_choch_up)
+chochDnFire = chochDn15 or f_decay_fire(smart_money_choch_dn)
+bosUpFire = (bosUp15 or f_decay_fire(smart_money_bos_up)) and not chochUpFire
+bosDnFire = (bosDn15 or f_decay_fire(smart_money_bos_dn)) and not chochDnFire
+
+hi50 = ta.highest(high, RANGE_W)
+lo50 = ta.lowest(low, RANGE_W)
+rangePos = f_clip((close - lo50) / math.max(hi50 - lo50, atr14 * 1e-6), 0.0, 1.0)
+smart_money_discount = f_clip01(f_clip(0.5 - rangePos, 0.0, 0.5) * 2.0)
+smart_money_premium = f_clip01(f_clip(rangePos - 0.5, 0.0, 0.5) * 2.0)
+smart_money_setup_long = f_clip01(f_clip(smart_money_choch_up * smart_money_discount * fvgProxUp15, 0.0, 1.5) / 1.5)
+smart_money_setup_short = f_clip01(f_clip(smart_money_choch_dn * smart_money_premium * fvgProxDn15, 0.0, 1.5) / 1.5)
+smart_money_long = math.max(math.max(smart_money_setup_long, smart_money_choch_up), smart_money_bos_up)
+smart_money_short = math.max(math.max(smart_money_setup_short, smart_money_choch_dn), smart_money_bos_dn)
+
+plot(plotSmLvl and showSM ? sh15 : na, "SM 15m swing high", color=colShort, style=plot.style_stepline)
+plot(plotSmLvl and showSM ? sl15 : na, "SM 15m swing low", color=colLong, style=plot.style_stepline)
+
+// H = ChoCH (always in turns-only). O/S/W only when turns-only is off.
+plotshape(showSM and chochUpFire, title="smart_money_choch_up", style=shape.triangleup, location=location.belowbar, color=colLong, size=size.small, text="H", textcolor=color.white)
+plotshape(showSM and chochDnFire, title="smart_money_choch_dn", style=shape.triangledown, location=location.abovebar, color=colShort, size=size.small, text="H", textcolor=color.white)
+plotshape(not markTurnsOnly and showSM and bosUpFire, title="smart_money_bos_up", style=shape.triangleup, location=location.belowbar, color=colLong, size=size.tiny, text="O", textcolor=color.white)
+plotshape(not markTurnsOnly and showSM and bosDnFire, title="smart_money_bos_dn", style=shape.triangledown, location=location.abovebar, color=colShort, size=size.tiny, text="O", textcolor=color.white)
+plotshape(not markTurnsOnly and showSM and f_cross_on(smart_money_setup_long) and not chochUpFire, title="smart_money_setup_long", style=shape.diamond, location=location.belowbar, color=colLong, size=size.tiny, text="S", textcolor=color.white)
+plotshape(not markTurnsOnly and showSM and f_cross_on(smart_money_setup_short) and not chochDnFire, title="smart_money_setup_short", style=shape.diamond, location=location.abovebar, color=colShort, size=size.tiny, text="S", textcolor=color.white)
+plotshape(not markTurnsOnly and showSM and smart_money_sweep_up >= markMin and f_rising(smart_money_sweep_up) and not f_rising(smart_money_sweep_up[1]), title="smart_money_sweep_up", style=shape.xcross, location=location.abovebar, color=colShort, size=size.tiny, text="W", textcolor=color.white)
+plotshape(not markTurnsOnly and showSM and smart_money_sweep_dn >= markMin and f_rising(smart_money_sweep_dn) and not f_rising(smart_money_sweep_dn[1]), title="smart_money_sweep_dn", style=shape.xcross, location=location.belowbar, color=colLong, size=size.tiny, text="W", textcolor=color.white)
+
+// ═══════════════════════════════════════════════════════════════════════
+// 6) macd_*
+// ═══════════════════════════════════════════════════════════════════════
+[macdLine, signalLine, hist] = ta.macd(close, 12, 26, 9)
+macd_cross_up_evt = ta.crossover(macdLine, signalLine)
+macd_cross_dn_evt = ta.crossunder(macdLine, signalLine)
+var float macd_cross_up = 0.0
+var float macd_cross_dn = 0.0
+macd_cross_up := f_decay(macd_cross_up_evt, macd_cross_up[1], DECAY_MACD)
+macd_cross_dn := f_decay(macd_cross_dn_evt, macd_cross_dn[1], DECAY_MACD)
+bull_soft = f_tanh((macdLine - signalLine) / atr14)
+macd_bull_soft = f_clip01((bull_soft + 1.0) * 0.5)
+macd_long = math.max(macd_cross_up, macd_bull_soft)
+macd_short = math.max(macd_cross_dn, 1.0 - macd_bull_soft)
+
+plotshape(showMACD and (markTurnsOnly ? macd_cross_up_evt : f_onset(macd_cross_up)), title="macd_cross_up", style=shape.flag, location=location.belowbar, color=colLong, size=size.tiny, text="X", textcolor=color.white)
+plotshape(showMACD and (markTurnsOnly ? macd_cross_dn_evt : f_onset(macd_cross_dn)), title="macd_cross_dn", style=shape.flag, location=location.abovebar, color=colShort, size=size.tiny, text="X", textcolor=color.white)

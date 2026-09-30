@@ -1,25 +1,16 @@
 //+------------------------------------------------------------------+
-//| SmartBS Entry — BOS/ChoCH/FVG structure (structure_sm.py parity)  |
+//| SmartBS Entry — BOS/ChoCH/FVG/sweep structure                    |
+//| Parity with smartbs_engines/smart_money_structure.py             |
 //+------------------------------------------------------------------+
 #ifndef SMARTBS_ENTRY_STRUCTURE_MQH
 #define SMARTBS_ENTRY_STRUCTURE_MQH
 
 #include "Indicators.mqh"
+#include "FeatureUtils.mqh"
 
 void SB_BarsSinceDecay(const bool &flag[], const int cap, double &out[])
   {
-   int n = ArraySize(flag);
-   ArrayResize(out, n);
-   int last = -1;
-   for(int i = 0; i < n; i++)
-     {
-      if(flag[i])
-         last = i;
-      if(last >= 0)
-         out[i] = MathMax(0.0, 1.0 - (i - last) / (double)cap);
-      else
-         out[i] = 0.0;
-     }
+   SB_BarsSinceFlagDecay(flag, cap, out);
   }
 
 void SB_BarsSinceDecayFromDouble(const double &flag[], const int cap, double &out[])
@@ -38,8 +29,16 @@ struct SBStructureBlock
    double bos_dn_decay[];
    double choch_up_decay[];
    double choch_dn_decay[];
+   double fvg_up_sz[];
+   double fvg_dn_sz[];
+   double dist_fvg_up[];
+   double dist_fvg_dn[];
    double fvg_prox_up[];
    double fvg_prox_dn[];
+   double sweep_up[];
+   double sweep_dn[];
+   double dist_sh[];
+   double dist_sl[];
   };
 
 void SB_ComputeStructureBlock(const double &high[], const double &low[], const double &close[],
@@ -96,12 +95,30 @@ void SB_ComputeStructureBlock(const double &high[], const double &low[], const d
    SB_BarsSinceDecay(choch_up, 50, blk.choch_up_decay);
    SB_BarsSinceDecay(choch_dn, 50, blk.choch_dn_decay);
 
+   ArrayResize(blk.sweep_up, n);
+   ArrayResize(blk.sweep_dn, n);
+   ArrayResize(blk.dist_sh, n);
+   ArrayResize(blk.dist_sl, n);
+   for(int i = 0; i < n; i++)
+     {
+      double su = SB_Clip(SB_SafeDiv(high[i] - p_sh[i], atr14[i]), 0.0, 3.0);
+      double sd = SB_Clip(SB_SafeDiv(p_sl[i] - low[i], atr14[i]), 0.0, 3.0);
+      blk.sweep_up[i] = SB_Nan0(su * ((close[i] <= p_sh[i]) ? 1.0 : 0.0));
+      blk.sweep_dn[i] = SB_Nan0(sd * ((close[i] >= p_sl[i]) ? 1.0 : 0.0));
+      blk.dist_sh[i] = SB_Nan0(SB_SafeDiv(close[i] - sh[i], atr14[i]));
+      blk.dist_sl[i] = SB_Nan0(SB_SafeDiv(close[i] - sl[i], atr14[i]));
+     }
+
    double h2[], l2[], ph[], pl[];
    SB_PrevArray(high, ph);
    SB_PrevArray(low, pl);
    SB_PrevArray(ph, h2);
    SB_PrevArray(pl, l2);
 
+   ArrayResize(blk.fvg_up_sz, n);
+   ArrayResize(blk.fvg_dn_sz, n);
+   ArrayResize(blk.dist_fvg_up, n);
+   ArrayResize(blk.dist_fvg_dn, n);
    ArrayResize(blk.fvg_prox_up, n);
    ArrayResize(blk.fvg_prox_dn, n);
    for(int i = 0; i < n; i++)
@@ -116,10 +133,14 @@ void SB_ComputeStructureBlock(const double &high[], const double &low[], const d
       double dist_dn = (fvg_dn > 0.0)
                        ? SB_SafeDiv(l2[i] - close[i], atr14[i])
                        : SB_SafeDiv(high[i] - close[i], atr14[i]);
-      dist_up = MathMax(-3.0, MathMin(3.0, dist_up));
-      dist_dn = MathMax(-3.0, MathMin(3.0, dist_dn));
-      blk.fvg_prox_up[i] = MathMax(0.0, MathMin(1.0, 1.0 - MathAbs(dist_up) / 2.0)) * (fvg_up_sz > 0.0 ? 1.0 : 0.0);
-      blk.fvg_prox_dn[i] = MathMax(0.0, MathMin(1.0, 1.0 - MathAbs(dist_dn) / 2.0)) * (fvg_dn_sz > 0.0 ? 1.0 : 0.0);
+      dist_up = SB_Clip(dist_up, -3.0, 3.0);
+      dist_dn = SB_Clip(dist_dn, -3.0, 3.0);
+      blk.fvg_up_sz[i] = SB_Nan0(fvg_up_sz);
+      blk.fvg_dn_sz[i] = SB_Nan0(fvg_dn_sz);
+      blk.dist_fvg_up[i] = SB_Nan0(dist_up);
+      blk.dist_fvg_dn[i] = SB_Nan0(dist_dn);
+      blk.fvg_prox_up[i] = SB_Clip(1.0 - MathAbs(dist_up) / 2.0, 0.0, 1.0) * (fvg_up_sz > 0.0 ? 1.0 : 0.0);
+      blk.fvg_prox_dn[i] = SB_Clip(1.0 - MathAbs(dist_dn) / 2.0, 0.0, 1.0) * (fvg_dn_sz > 0.0 ? 1.0 : 0.0);
      }
   }
 

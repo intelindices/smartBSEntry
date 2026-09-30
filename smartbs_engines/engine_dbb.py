@@ -1,12 +1,16 @@
-"""SmartBSDbbEngine — double Bollinger Band region occupancy (1h + 15m).
+"""SmartBSDbbEngine — double Bollinger close-zone location (1h + 15m).
 
-Primary series: **1h**. BB pack on 1h and on last completed 15m.
+Primary series: **1h**. Slim BB pack on 1h and on last completed 15m.
 
-Channels (26):
-  1h BB pack (13) + 15m BB pack (13)
+Channels (12):
+  1h pack (6) + 15m pack (6)
 
-MACD is a separate ST engine — not embedded here — so blend pools do not
-double-count it.
+Per-TF pack: body peak zone code + 5 close-in-zone one-hots.
+Body%/range% occupancy dropped (close zone is the actionable signal).
+
+Five zones (inner mid bands merged into one mid zone):
+  upper_outer (+2), upper_outer_to_inner (+1), mid_zone (0),
+  lower_inner_to_outer (-1), lower_outer (-2).
 """
 
 from __future__ import annotations
@@ -17,7 +21,12 @@ import numpy as np
 import pandas as pd
 
 from smartbs_engines.registry import BaseSTEngine, EngineResult
-from smartbs_engines.smart_money_structure import load_aligned_15m
+from smartbs_engines.smart_money_structure import (
+    HOUR_MS,
+    is_15m_bars,
+    load_aligned_15m,
+    load_aligned_1h,
+)
 from smartbs_engines.structure import sma
 
 BB_LENGTH = 20
@@ -80,18 +89,18 @@ def resolve_bb_params(
 _ZONE_SUFFIXES: tuple[str, ...] = (
     "upper_outer",
     "upper_outer_to_inner",
-    "upper_inner_to_mid",
-    "mid_to_lower_inner",
+    "mid_zone",
     "lower_inner_to_outer",
     "lower_outer",
 )
 
-_ZONE_CODES: tuple[float, ...] = (3.0, 2.0, 1.0, -1.0, -2.0, -3.0)
+# mid_zone code is 0 (valid peak); doji / empty body still uses 0 only when best<=0
+# so peak channel uses codes and falls back to 0 for empty — same numeric mid.
+_ZONE_CODES: tuple[float, ...] = (2.0, 1.0, 0.0, -1.0, -2.0)
 
 _BASE_CHANNEL_NAMES: tuple[str, ...] = (
-    *(f"body_pct_{suf}" for suf in _ZONE_SUFFIXES),
-    *(f"range_pct_{suf}" for suf in _ZONE_SUFFIXES),
     "body_peak_zone",
+    *(f"close_in_{suf}" for suf in _ZONE_SUFFIXES),
 )
 
 FEATURE_NAMES: tuple[str, ...] = (
@@ -178,21 +187,27 @@ def region_occupancy_pct(
     seg_hi: np.ndarray,
     bb: DoubleBollinger,
 ) -> list[np.ndarray]:
-    """Six region occupancy fractions (top -> bottom), each in [0, 1]."""
+    """Five region occupancy fractions (top -> bottom), each in [0, 1].
+
+    Mid zone merges former upper_inner_to_mid + mid_to_lower_inner
+    into [lower1, upper1].
+    """
     pos_inf = np.full_like(seg_lo, np.inf)
     neg_inf = np.full_like(seg_lo, -np.inf)
     return [
         _frac_overlap(seg_lo, seg_hi, bb.upper2, pos_inf),
         _frac_overlap(seg_lo, seg_hi, bb.upper1, bb.upper2),
-        _frac_overlap(seg_lo, seg_hi, bb.basis, bb.upper1),
-        _frac_overlap(seg_lo, seg_hi, bb.lower1, bb.basis),
+        _frac_overlap(seg_lo, seg_hi, bb.lower1, bb.upper1),
         _frac_overlap(seg_lo, seg_hi, bb.lower2, bb.lower1),
         _frac_overlap(seg_lo, seg_hi, neg_inf, bb.lower2),
     ]
 
 
 def body_peak_zone_code(body_pcts: list[np.ndarray]) -> np.ndarray:
-    """Signed zone where the largest body share sits; 0 if none / doji."""
+    """Signed zone where the largest body share sits; 0 if none / doji.
+
+    Mid zone peak is also coded 0, so empty-body and mid-peak share the value.
+    """
     mat = np.stack(body_pcts, axis=1)
     codes = np.asarray(_ZONE_CODES, dtype=np.float64)
     peak = np.argmax(mat, axis=1)
@@ -201,6 +216,32 @@ def body_peak_zone_code(body_pcts: list[np.ndarray]) -> np.ndarray:
     ok = best > 0.0
     out[ok] = codes[peak[ok]]
     return out
+
+
+def close_zone_onehots(close: np.ndarray, bb: DoubleBollinger) -> list[np.ndarray]:
+    """Mutually exclusive one-hots: which zone the candle close sits in."""
+    n = len(close)
+    outs = [np.zeros(n, dtype=np.float64) for _ in range(5)]
+    ok = (
+        np.isfinite(close)
+        & np.isfinite(bb.upper1)
+        & np.isfinite(bb.lower1)
+        & np.isfinite(bb.upper2)
+        & np.isfinite(bb.lower2)
+    )
+    c = close
+    # Top → bottom, closed on lower edge of each band gap except outer top.
+    z0 = ok & (c >= bb.upper2)
+    z1 = ok & ~z0 & (c >= bb.upper1)
+    z2 = ok & ~z0 & ~z1 & (c >= bb.lower1)
+    z3 = ok & ~z0 & ~z1 & ~z2 & (c >= bb.lower2)
+    z4 = ok & ~z0 & ~z1 & ~z2 & ~z3
+    outs[0][z0] = 1.0
+    outs[1][z1] = 1.0
+    outs[2][z2] = 1.0
+    outs[3][z3] = 1.0
+    outs[4][z4] = 1.0
+    return outs
 
 
 def pack_dbb_channels(
@@ -214,20 +255,20 @@ def pack_dbb_channels(
     mult2: float = BB_MULT_OUTER,
     bb: DoubleBollinger | None = None,
 ) -> list[np.ndarray]:
-    """13 channels for one TF: 6 body% + 6 range% + peak zone."""
+    """6 channels for one TF: peak zone + 5 close-in one-hots."""
     bands = bb if bb is not None else double_bollinger(
         close, length=length, mult1=mult1, mult2=mult2
     )
     body_lo = np.minimum(open_, close)
     body_hi = np.maximum(open_, close)
     body_pcts = region_occupancy_pct(body_lo, body_hi, bands)
-    range_pcts = region_occupancy_pct(low, high, bands)
     peak = body_peak_zone_code(body_pcts)
-    return [*body_pcts, *range_pcts, peak]
+    close_oh = close_zone_onehots(close, bands)
+    return [peak, *close_oh]
 
 
 class SmartBSDbbEngine(BaseSTEngine):
-    """dBB: 26 channels — 1h + last-completed 15m BB packs."""
+    """dBB: 12 channels — 1h + last-completed 15m close-zone packs."""
 
     name = "dbb"
     feature_names = list(FEATURE_NAMES)
@@ -267,9 +308,32 @@ class SmartBSDbbEngine(BaseSTEngine):
             mult1=self._mult_inner,
             mult2=self._mult_outer,
         )
-        cols_1h = pack_dbb_channels(o, h, l, c, length=L1, mult1=m1, mult2=m2)
+        cols_primary = pack_dbb_channels(o, h, l, c, length=L1, mult1=m1, mult2=m2)
 
         bag = dict(frames) if frames else {}
+        if is_15m_bars(df):
+            # Primary=15m → second pack is last-completed 1h (reuse _15m channel slots)
+            if bag.get("1h") is None or not len(bag.get("1h", [])):
+                bag["1h"] = load_aligned_1h(df, symbol=symbol, data_source=data_source)
+            df_htf = bag["1h"]
+            if df_htf is None or len(df_htf) == 0:
+                cols_htf = [np.zeros(n, dtype=np.float64) for _ in _BASE_CHANNEL_NAMES]
+            else:
+                t_htf = df_htf["open_time"].to_numpy(dtype=np.int64)
+                pack_htf = pack_dbb_channels(
+                    df_htf["open"].to_numpy(dtype=np.float64),
+                    df_htf["high"].to_numpy(dtype=np.float64),
+                    df_htf["low"].to_numpy(dtype=np.float64),
+                    df_htf["close"].to_numpy(dtype=np.float64),
+                    length=L15,
+                    mult1=m1,
+                    mult2=m2,
+                )
+                cols_htf = [
+                    _map_last_completed(times, t_htf, ch, dur_ms=HOUR_MS) for ch in pack_htf
+                ]
+            return self._finalize([*cols_primary, *cols_htf], n)
+
         if bag.get("15m") is None or not len(bag.get("15m", [])):
             bag["15m"] = load_aligned_15m(df, symbol=symbol, data_source=data_source)
         df15 = bag["15m"]
@@ -290,7 +354,7 @@ class SmartBSDbbEngine(BaseSTEngine):
                 _map_last_completed(times, t15, ch, dur_ms=M15_MS) for ch in pack15
             ]
 
-        return self._finalize([*cols_1h, *cols_15m], n)
+        return self._finalize([*cols_primary, *cols_15m], n)
 
 
 def feature_names() -> list[str]:

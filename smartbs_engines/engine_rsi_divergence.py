@@ -15,7 +15,7 @@ Setups encoded as decaying event channels (not one-hot flags):
 
 26 scale-free channels — see ``FEATURE_NAMES`` for audit.
 
-v2 channel tweaks (still 26 inputs):
+v2 channel tweaks:
   - ``has_15m`` replaces redundant ``ema_spread_pct`` (minor RSI data quality).
   - ``bull_div_decay`` / ``bear_div_decay`` replace slope "pressure" with classic
     pivot RSI divergence on the major (1h) series.
@@ -27,11 +27,12 @@ import numpy as np
 import pandas as pd
 
 from smartbs_engines.smart_money_structure import (
+    is_15m_bars,
     load_aligned_15m,
     map_15m_end_of_hour_to_1h,
     prev_array,
 )
-from smartbs_engines.registry import BaseSTEngine, EngineResult, safe_div, slope_norm
+from smartbs_engines.registry import BaseSTEngine, EngineResult, atr_unit, safe_div, slope_unit
 from smartbs_engines.structure import atr as _atr, ema as _ema, pivothigh, pivotlow, rsi as _rsi
 
 RSI_PERIOD = 14
@@ -154,7 +155,10 @@ def _minor_rsi_on_1h(
     symbol: str | None,
     data_source: str | None,
 ) -> tuple[np.ndarray, bool]:
-    """Return minor RSI aligned to 1h index; bool = used real 15m."""
+    """Return minor RSI aligned to primary index; bool = used real minor TF."""
+    if is_15m_bars(df):
+        # Primary already 15m — use faster RSI on same series as "minor".
+        return _rsi(close_1h, MINOR_FALLBACK_PERIOD), True
     times_1h = df["open_time"].to_numpy(dtype=np.int64)
     df15 = load_aligned_15m(df, symbol=symbol, data_source=data_source)
     if df15 is not None and len(df15) >= RSI_PERIOD + 5:
@@ -196,8 +200,8 @@ def compute_rsi_divergence_overlay(
         "used_15m": np.full(len(close), 1.0 if used_15m else 0.0),
         "cont_long": uptrend & maj_band & min_up,
         "cont_short": downtrend & maj_band & min_dn,
-        "rev_long": sim_up,
-        "rev_short": sim_dn,
+        "rev_long": sim_up & downtrend,
+        "rev_short": sim_dn & uptrend,
     }
 
 
@@ -249,8 +253,8 @@ class RSIDivergenceSTEngine(BaseSTEngine):
         has_15m = np.full(n, 1.0 if used_15m else 0.0, dtype=np.float64)
 
         trend_cols = [
-            np.clip(safe_div(stack, atr14), -3.0, 3.0),
-            slope_norm(stack, atr14),
+            atr_unit(stack, atr14, k=3.0),
+            slope_unit(stack, atr14, k=2.0),
             np.tanh(safe_div(close - ema_f, atr14)),
             bull_soft,
             bear_soft,

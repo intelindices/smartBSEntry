@@ -1,0 +1,462 @@
+//@version=5
+// smartBSRMSTIndicator — 3-MA stack trend regime, Supertrend, pivot-channel trendlines.
+// Bull: fast > mid > slow. Bear: fast < mid < slow. Else sideways.
+// Safe zones: last 3 pivot highs/lows, width = 0.5% of price.
+// Live: last 3 pivot zones. Debug: all historical R/P/B marks. Pivot triangles are hidden.
+// R: safe-zone reverse while the stack is trending. P: trend pullback on a 3-MA stack. B: sideways breakout.
+// Pivot channel adapted from Pivot Channel TrendLines [BigBeluga], CC BY-NC-SA 4.0.
+indicator("smartBSRMSTIndicator", overlay=true, max_bars_back=500, max_lines_count=500, max_labels_count=500, max_boxes_count=50)
+
+grpMa = "Moving averages"
+maFastLen = input.int(14, "Fast EMA", minval=1, group=grpMa)
+maMidLen = input.int(48, "Mid EMA", minval=1, group=grpMa)
+maSlowLen = input.int(120, "Slow EMA", minval=1, group=grpMa)
+showMas = input.bool(true, "Show MAs", group=grpMa)
+
+grpRegime = "Trend regime"
+showRegime = input.bool(true, "Show regime bgcolor", group=grpRegime)
+regimeTrans = input.int(92, "Regime transparency", minval=70, maxval=98, step=1, group=grpRegime)
+colBull = input.color(color.new(#26A69A, 0), "Bull color", group=grpRegime)
+colBear = input.color(color.new(#EF5350, 0), "Bear color", group=grpRegime)
+colSide = input.color(color.new(color.gray, 0), "Sideways color", group=grpRegime)
+showTable = input.bool(true, "Show regime table", group=grpRegime)
+
+grpSt = "Supertrend"
+showSt = input.bool(true, "Show Supertrend", group=grpSt)
+stAtrLen = input.int(10, "ATR length", minval=1, group=grpSt)
+stFactor = input.float(3.0, "Factor", minval=0.1, step=0.1, group=grpSt)
+
+grpView = "Display"
+debugMode = input.bool(false, "Debug: all historical marks", group=grpView,
+     tooltip="Off (live): R/P/B marks inside the last-3 pivot span. On: every historical R/P/B mark. Safe zones always cover only the last 3 highs and last 3 lows. Pivot triangles stay hidden.")
+
+grpZone = "Safe entry zones"
+showZones = input.bool(true, "Show last-3 pivot safe zones", group=grpZone,
+     tooltip="Buy band above each of the last 3 pivot lows, sell band below each of the last 3 pivot highs. Width is 0.5% of price.")
+zoneTrans = input.int(82, "Zone fill transparency", minval=50, maxval=95, step=1, group=grpZone)
+showBS = input.bool(true, "Mark reverse R", group=grpZone,
+     tooltip="While the MA stack is bull or bear: R when price reverses back out of a buy zone or a sell zone. One mark per visit. Live keeps marks inside the last-3 pivot span. Debug keeps all marks.")
+showPull = input.bool(true, "Mark trend pullback P", group=grpZone,
+     tooltip="Bull stack (fast > mid > slow): price pulls into mid or slow, then closes back above fast. Bear stack: price pulls into mid or slow, then closes back below fast.")
+showP = input.bool(true, "Mark sideways breakout B", group=grpZone,
+     tooltip="While the stack is sideways, the range is the distance from the last pivot high to the last pivot low. B when close leaves that range.")
+
+grpTL = "Pivot channel trendlines"
+showPivotChannel = input.bool(true, "Show pivot channel trendlines", group=grpTL)
+pivotLen = input.int(9, "Pivot lookback", minval=1, maxval=100, group=grpTL,
+     tooltip="Bars before and after to confirm a high or low. Default 9. Shared by safe zones, pivot points, and trendlines.")
+tlExtBars = input.int(70, "Trendline extension (bars)", minval=1, group=grpTL)
+tlExtStyleIn = input.string("Dotted", "Extension line style", options=["Dashed", "Dotted", "Solid"], group=grpTL)
+tlPhColor = input.color(color.blue, "Pivot high color", group=grpTL)
+tlPlColor = input.color(color.lime, "Pivot low color", group=grpTL)
+showTlDashes = input.bool(true, "Show last pivot price", group=grpTL)
+tlDashStyleIn = input.string("Dashed", "Last-pivot line style", options=["Dashed", "Dotted", "Solid"], group=grpTL)
+showTlDir = input.bool(true, "Mark extension breakouts", group=grpTL)
+tlBreakMax = input.int(100, "Max breakout marks kept", minval=10, maxval=500, group=grpTL)
+
+colFast = #81D4FA
+colMid = #26A69A
+colSlow = #FFA726
+
+float maFast = ta.ema(close, maFastLen)
+float maMid = ta.ema(close, maMidLen)
+float maSlow = ta.ema(close, maSlowLen)
+
+bool regimeUp = maFast > maMid and maMid > maSlow
+bool regimeDn = maFast < maMid and maMid < maSlow
+string regimeTxt = regimeUp ? "BULL" : regimeDn ? "BEAR" : "SIDE"
+
+plot(showMas ? maFast : na, "EMA Fast", color=colFast, linewidth=1)
+plot(showMas ? maMid : na, "EMA Mid", color=colMid, linewidth=1)
+plot(showMas ? maSlow : na, "EMA Slow", color=colSlow, linewidth=2)
+
+[stLine, stDir] = ta.supertrend(stFactor, stAtrLen)
+color stCol = stDir < 0 ? colBull : colBear
+plot(showSt ? stLine : na, "Supertrend", color=stCol, linewidth=2)
+string stTxt = stDir < 0 ? "UP" : "DOWN"
+
+color regimeBg =
+     not showRegime ? na :
+     regimeUp ? color.new(colBull, regimeTrans) :
+     regimeDn ? color.new(colBear, regimeTrans) :
+     color.new(colSide, regimeTrans)
+bgcolor(regimeBg, title="Trend regime")
+
+// ═══════════════════════════════════════════════════════════════════════
+// Pivot channel trendlines
+// ═══════════════════════════════════════════════════════════════════════
+float phRaw = ta.pivothigh(high, pivotLen, pivotLen)
+float plRaw = ta.pivotlow(low, pivotLen, pivotLen)
+int pivBar = math.max(0, bar_index - pivotLen)
+float atrCh = ta.atr(200)
+
+// Safe-zone width is 0.5% of the current price.
+float zoneDist = close * 0.005
+
+LIVE_N = 3
+DBG_CAP = 100
+colBuy = #26A69A
+colSell = #EF5350
+
+var float[] phPrices = array.new_float()
+var int[] phBars = array.new_int()
+var float[] plPrices = array.new_float()
+var int[] plBars = array.new_int()
+var box[] buyBoxes = array.new_box()
+var box[] sellBoxes = array.new_box()
+var label[] bsLabs = array.new_label()
+var int[] bsBars = array.new_int()
+
+f_trim_piv(float[] prices, int[] bars) =>
+    while array.size(prices) > LIVE_N
+        array.shift(prices)
+        array.shift(bars)
+
+f_oldest_piv() =>
+    int oldest = bar_index
+    if array.size(phBars) > 0
+        for i = 0 to array.size(phBars) - 1
+            oldest := math.min(oldest, array.get(phBars, i))
+    if array.size(plBars) > 0
+        for i = 0 to array.size(plBars) - 1
+            oldest := math.min(oldest, array.get(plBars, i))
+    oldest
+
+f_trim_bs(int minBar) =>
+    if array.size(bsBars) > 0
+        for i = array.size(bsBars) - 1 to 0
+            if array.get(bsBars, i) < minBar
+                label.delete(array.get(bsLabs, i))
+                array.remove(bsLabs, i)
+                array.remove(bsBars, i)
+
+f_add_piv(float[] prices, int[] bars, float price, int xBar) =>
+    array.push(prices, price)
+    array.push(bars, xBar)
+    f_trim_piv(prices, bars)
+
+f_clear_boxes(box[] boxes) =>
+    while array.size(boxes) > 0
+        box.delete(array.shift(boxes))
+
+f_sync_boxes(box[] boxes, int want) =>
+    while array.size(boxes) > want
+        box.delete(array.pop(boxes))
+    while array.size(boxes) < want
+        array.push(boxes, box.new(bar_index, close, bar_index, close, border_color=color.new(color.gray, 100), bgcolor=color.new(color.gray, 100), border_width=2))
+
+f_drop_broken_highs(float[] prices, int[] bars, float pxHigh) =>
+    if array.size(prices) > 0
+        for i = array.size(prices) - 1 to 0
+            if pxHigh > array.get(prices, i)
+                array.remove(prices, i)
+                array.remove(bars, i)
+
+f_drop_broken_lows(float[] prices, int[] bars, float pxLow) =>
+    if array.size(prices) > 0
+        for i = array.size(prices) - 1 to 0
+            if pxLow < array.get(prices, i)
+                array.remove(prices, i)
+                array.remove(bars, i)
+
+// Sideways box is the last pivot high and last pivot low. Checked before a break removes that pivot.
+var float sideHi = na
+var float sideLo = na
+var bool sideHeld = false
+bool markP = false
+bool markPUp = false
+colP = #42A5F5
+if barstate.isconfirmed
+    bool sideNow = not regimeUp and not regimeDn
+    bool sideWas = bar_index > 0 and not regimeUp[1] and not regimeDn[1]
+    if sideHeld and not na(sideHi) and not na(sideLo) and sideHi > sideLo and (sideNow or sideWas)
+        if close > sideHi
+            markP := true
+            markPUp := true
+        else if close < sideLo
+            markP := true
+            markPUp := false
+    if markP
+        sideHeld := false
+
+    f_drop_broken_highs(phPrices, phBars, high)
+    f_drop_broken_lows(plPrices, plBars, low)
+    if not na(phRaw)
+        f_add_piv(phPrices, phBars, phRaw, pivBar)
+    if not na(plRaw)
+        f_add_piv(plPrices, plBars, plRaw, pivBar)
+
+    if showZones
+        color buyFill = color.new(colBuy, zoneTrans)
+        color sellFill = color.new(colSell, zoneTrans)
+        int zoneRight = bar_index
+
+        int nBuyAll = array.size(plPrices)
+        int nBuy = math.min(nBuyAll, LIVE_N)
+        f_sync_boxes(buyBoxes, nBuy)
+        if nBuy > 0
+            for i = 0 to nBuy - 1
+                int idx = nBuyAll - nBuy + i
+                float pl = array.get(plPrices, idx)
+                int left = array.get(plBars, idx)
+                box b = array.get(buyBoxes, i)
+                box.set_lefttop(b, left, pl + zoneDist)
+                box.set_rightbottom(b, zoneRight, pl)
+                box.set_bgcolor(b, buyFill)
+                box.set_border_color(b, color.new(colBuy, 100))
+                box.set_border_width(b, 0)
+
+        int nSellAll = array.size(phPrices)
+        int nSell = math.min(nSellAll, LIVE_N)
+        f_sync_boxes(sellBoxes, nSell)
+        if nSell > 0
+            for i = 0 to nSell - 1
+                int idx = nSellAll - nSell + i
+                float ph = array.get(phPrices, idx)
+                int left = array.get(phBars, idx)
+                box b = array.get(sellBoxes, i)
+                box.set_lefttop(b, left, ph)
+                box.set_rightbottom(b, zoneRight, ph - zoneDist)
+                box.set_bgcolor(b, sellFill)
+                box.set_border_color(b, color.new(colSell, 100))
+                box.set_border_width(b, 0)
+    else
+        f_clear_boxes(buyBoxes)
+        f_clear_boxes(sellBoxes)
+
+    if sideNow and array.size(phPrices) > 0 and array.size(plPrices) > 0
+        float hi = array.get(phPrices, array.size(phPrices) - 1)
+        float lo = array.get(plPrices, array.size(plPrices) - 1)
+        if hi > lo
+            sideHi := hi
+            sideLo := lo
+            if not markP and close <= hi and close >= lo
+                sideHeld := true
+        else
+            sideHeld := false
+    else if not sideNow
+        sideHeld := false
+
+// R: safe-zone reverse while the stack is trending. One mark per visit. Pivot must hold.
+// P: 3-MA stack pullback into mid or slow, then close back through fast.
+bool stacked = regimeUp or regimeDn
+var float armedPl = na
+var float armedPh = na
+var bool pbDipUp = false
+var bool pbDipDn = false
+bool markB = false
+bool markS = false
+bool markPullUp = false
+bool markPullDn = false
+colPull = #FFD54F
+if barstate.isconfirmed
+    if not stacked
+        armedPl := na
+        armedPh := na
+    else
+        int nLo = array.size(plPrices)
+        float dipped = na
+        if nLo > 0
+            for i = 0 to nLo - 1
+                float pl = array.get(plPrices, i)
+                float top = pl + zoneDist
+                if low >= pl and low <= top and close <= top
+                    if na(dipped) or pl > dipped
+                        dipped := pl
+                if low >= pl and low <= top and close > top
+                    markB := true
+        if not na(dipped)
+            armedPl := dipped
+        if not na(armedPl) and low >= armedPl and close > armedPl + zoneDist
+            markB := true
+        if not na(armedPl) and low < armedPl
+            armedPl := na
+        if markB
+            armedPl := na
+
+        int nHi = array.size(phPrices)
+        float pushed = na
+        if nHi > 0
+            for i = 0 to nHi - 1
+                float ph = array.get(phPrices, i)
+                float bot = ph - zoneDist
+                if high <= ph and high >= bot and close >= bot
+                    if na(pushed) or ph < pushed
+                        pushed := ph
+                if high <= ph and high >= bot and close < bot
+                    markS := true
+        if not na(pushed)
+            armedPh := pushed
+        if not na(armedPh) and high <= armedPh and close < armedPh - zoneDist
+            markS := true
+        if not na(armedPh) and high > armedPh
+            armedPh := na
+        if markS
+            armedPh := na
+
+    if not regimeUp
+        pbDipUp := false
+    else if low <= maMid or low <= maSlow
+        pbDipUp := true
+    if not regimeDn
+        pbDipDn := false
+    else if high >= maMid or high >= maSlow
+        pbDipDn := true
+    markPullUp := regimeUp and pbDipUp and ta.crossover(close, maFast)
+    markPullDn := regimeDn and pbDipDn and ta.crossunder(close, maFast)
+    if markPullUp
+        pbDipUp := false
+    if markPullDn
+        pbDipDn := false
+
+    if showBS and markB
+        array.push(bsLabs, label.new(bar_index, low, "R", style=label.style_label_up, color=colBuy, textcolor=color.white, size=size.small))
+        array.push(bsBars, bar_index)
+    if showBS and markS
+        array.push(bsLabs, label.new(bar_index, high, "R", style=label.style_label_down, color=colSell, textcolor=color.white, size=size.small))
+        array.push(bsBars, bar_index)
+    if showPull and markPullUp
+        array.push(bsLabs, label.new(bar_index, low, "P", style=label.style_label_up, color=colPull, textcolor=color.black, size=size.small))
+        array.push(bsBars, bar_index)
+    if showPull and markPullDn
+        array.push(bsLabs, label.new(bar_index, high, "P", style=label.style_label_down, color=colPull, textcolor=color.black, size=size.small))
+        array.push(bsBars, bar_index)
+    if showP and markP
+        array.push(bsLabs, label.new(bar_index, markPUp ? high : low, "B",
+             style=markPUp ? label.style_label_down : label.style_label_up,
+             color=colP, textcolor=color.white, size=size.small))
+        array.push(bsBars, bar_index)
+    if debugMode
+        while array.size(bsLabs) > DBG_CAP
+            label.delete(array.shift(bsLabs))
+            array.shift(bsBars)
+    else
+        f_trim_bs(f_oldest_piv())
+
+tlDashStyle = tlDashStyleIn == "Dashed" ? line.style_dashed : tlDashStyleIn == "Dotted" ? line.style_dotted : line.style_solid
+tlExtStyle = tlExtStyleIn == "Dashed" ? line.style_dashed : tlExtStyleIn == "Dotted" ? line.style_dotted : line.style_solid
+
+var bool tlPhReady = false
+var float tlPhVal = na
+var int tlPhIndx = na
+var bool tlPlReady = false
+var float tlPlVal = na
+var int tlPlIndx = na
+
+var int tlUpperBar = na
+var float tlUpperY = na
+var float tlUpperSlope = na
+var bool tlUpperOn = false
+var int tlLowerBar = na
+var float tlLowerY = na
+var float tlLowerSlope = na
+var bool tlLowerOn = false
+
+var label[] tlBreakLabs = array.new_label()
+var line tlPhDash = na
+var label tlPhDashLab = na
+var line tlPlDash = na
+var label tlPlDashLab = na
+
+f_trim_break_labs() =>
+    while array.size(tlBreakLabs) > tlBreakMax
+        label.delete(array.shift(tlBreakLabs))
+
+f_add_break_lab(int xBar, float y, string txt, color col, bool isUp) =>
+    array.push(tlBreakLabs, label.new(xBar, y, txt,
+         style=isUp ? label.style_label_up : label.style_label_down,
+         color=col,
+         textcolor=color.white,
+         size=size.small))
+    f_trim_break_labs()
+
+if not na(phRaw)
+    if tlPhReady and pivBar != tlPhIndx
+        float tlSlope = (phRaw - tlPhVal) / (pivBar - tlPhIndx)
+        if showPivotChannel
+            line.new(tlPhIndx, tlPhVal, pivBar, phRaw, width=2, color=tlPhColor)
+        if phRaw < tlPhVal and (tlPhVal - phRaw) >= atrCh
+            if showPivotChannel
+                line.new(pivBar, phRaw, pivBar + tlExtBars, phRaw + tlSlope * tlExtBars, style=tlExtStyle, color=tlPhColor)
+            tlUpperBar := pivBar
+            tlUpperY := phRaw
+            tlUpperSlope := tlSlope
+            tlUpperOn := true
+    tlPhVal := phRaw
+    tlPhIndx := pivBar
+    tlPhReady := true
+    if showPivotChannel and showTlDashes
+        line.delete(tlPhDash)
+        label.delete(tlPhDashLab)
+        tlPhDash := line.new(pivBar, phRaw, bar_index, phRaw, style=tlDashStyle, color=tlPhColor, width=1)
+        tlPhDashLab := label.new(bar_index, phRaw, text=str.tostring(phRaw, format.mintick), style=label.style_label_left, color=tlPhColor, textcolor=color.white, size=size.small)
+
+if not na(plRaw)
+    if tlPlReady and pivBar != tlPlIndx
+        float tlSlope = (plRaw - tlPlVal) / (pivBar - tlPlIndx)
+        if showPivotChannel
+            line.new(tlPlIndx, tlPlVal, pivBar, plRaw, width=2, color=tlPlColor)
+        if tlPlVal < plRaw and (plRaw - tlPlVal) >= atrCh
+            if showPivotChannel
+                line.new(pivBar, plRaw, pivBar + tlExtBars, plRaw + tlSlope * tlExtBars, style=tlExtStyle, color=tlPlColor)
+            tlLowerBar := pivBar
+            tlLowerY := plRaw
+            tlLowerSlope := tlSlope
+            tlLowerOn := true
+    tlPlVal := plRaw
+    tlPlIndx := pivBar
+    tlPlReady := true
+    if showPivotChannel and showTlDashes
+        line.delete(tlPlDash)
+        label.delete(tlPlDashLab)
+        tlPlDash := line.new(pivBar, plRaw, bar_index, plRaw, style=tlDashStyle, color=tlPlColor, width=1)
+        tlPlDashLab := label.new(bar_index, plRaw, text=str.tostring(plRaw, format.mintick), style=label.style_label_left, color=tlPlColor, textcolor=color.white, size=size.small)
+
+bool upMark = false
+bool dnMark = false
+if tlUpperOn
+    int barsPassedUpper = bar_index - tlUpperBar
+    if barsPassedUpper <= tlExtBars and barsPassedUpper >= 0
+        float expectedUpper = tlUpperY + tlUpperSlope * barsPassedUpper
+        if close > expectedUpper and barstate.isconfirmed
+            upMark := true
+            tlUpperOn := false
+    else if barsPassedUpper > tlExtBars
+        tlUpperOn := false
+if tlLowerOn
+    int barsPassedLower = bar_index - tlLowerBar
+    if barsPassedLower <= tlExtBars and barsPassedLower >= 0
+        float expectedLower = tlLowerY + tlLowerSlope * barsPassedLower
+        if close < expectedLower and barstate.isconfirmed
+            dnMark := true
+            tlLowerOn := false
+    else if barsPassedLower > tlExtBars
+        tlLowerOn := false
+
+if upMark and showPivotChannel and showTlDir
+    f_add_break_lab(bar_index, low, "Up", tlPhColor, true)
+if dnMark and showPivotChannel and showTlDir
+    f_add_break_lab(bar_index, high, "Down", tlPlColor, false)
+if not showTlDir or not showPivotChannel
+    while array.size(tlBreakLabs) > 0
+        label.delete(array.shift(tlBreakLabs))
+
+if showPivotChannel and showTlDashes and barstate.islast
+    if not na(tlPhDash)
+        line.set_x2(tlPhDash, bar_index)
+        label.set_x(tlPhDashLab, bar_index)
+    if not na(tlPlDash)
+        line.set_x2(tlPlDash, bar_index)
+        label.set_x(tlPlDashLab, bar_index)
+
+color rcol = regimeUp ? colBull : regimeDn ? colBear : colSide
+var table info = table.new(position.top_right, 2, 4, bgcolor=color.new(color.black, 75), border_width=1)
+if showTable and barstate.islast
+    table.cell(info, 0, 0, "smartBSRMST", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 0, regimeTxt, text_color=rcol, text_size=size.small)
+    table.cell(info, 0, 1, "Stack", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 1, regimeUp ? "F>M>S" : regimeDn ? "F<M<S" : "mixed", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 0, 2, "Supertrend", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 2, stTxt, text_color=stCol, text_size=size.tiny)
+    table.cell(info, 0, 3, "0.5% dist", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 3, str.tostring(zoneDist, format.mintick), text_color=color.yellow, text_size=size.tiny)

@@ -13,7 +13,7 @@ from typing import Any, Optional
 import torch
 
 from smartbs_engines.engines import normalize_feature_engine
-from smartbs_engines.model import SmartBSClassifier
+from smartbs_engines.model import build_classifier, normalize_backbone
 from smartbs_engines.registry import get_engine
 
 CHECKPOINT_KEEP = 3
@@ -30,14 +30,29 @@ class PromotionResult:
     backup: str = ""
 
 
-def checkpoint_spec_fields(engine_name: str = "maribbon") -> dict[str, Any]:
-    eng = get_engine(engine_name)
-    return {
+def checkpoint_spec_fields(
+    engine_name: str = "maribbon",
+    *,
+    signal_engines: list[str] | tuple[str, ...] | str | None = None,
+) -> dict[str, Any]:
+    from smartbs_engines.engines import resolve_feature_engine
+
+    name, sources = resolve_feature_engine(engine_name, signal_engines)
+    eng = (
+        get_engine("signals", signal_sources=sources)
+        if name == "signals"
+        else get_engine(name)
+    )
+    out: dict[str, Any] = {
         ENGINE_KEY: eng.name,
         SPEC_HASH_KEY: eng.spec_hash(),
         WARMUP_KEY: int(eng.warmup_bars),
         "num_inputs": int(eng.num_inputs),
     }
+    if name == "signals":
+        out["signal_engines"] = list(getattr(eng, "sources", ()))
+        out["signal_ids"] = list(eng.feature_names)
+    return out
 
 
 def validate_checkpoint_config(
@@ -47,7 +62,12 @@ def validate_checkpoint_config(
 ) -> tuple[bool, str]:
     try:
         engine_name = normalize_feature_engine(ckpt_cfg.get(ENGINE_KEY) or "maribbon")
-        eng = get_engine(engine_name)
+        sig = ckpt_cfg.get("signal_engines")
+        eng = (
+            get_engine("signals", signal_sources=sig)
+            if engine_name == "signals"
+            else get_engine(engine_name)
+        )
     except ValueError as e:
         return False, str(e)
 
@@ -70,7 +90,12 @@ def validate_checkpoint_config(
 def _assert_feature_spec_current(cfg_dict: dict, checkpoint_path: str) -> None:
     claimed = str(cfg_dict.get("feature_spec_hash") or "").strip()
     engine = normalize_feature_engine(cfg_dict.get("feature_engine") or "maribbon")
-    eng = get_engine(engine)
+    sig = cfg_dict.get("signal_engines")
+    eng = (
+        get_engine("signals", signal_sources=sig)
+        if engine == "signals"
+        else get_engine(engine)
+    )
     n_in = cfg_dict.get("num_inputs")
     if n_in is not None and int(n_in) != eng.num_inputs:
         raise RuntimeError(
@@ -88,7 +113,7 @@ def _assert_feature_spec_current(cfg_dict: dict, checkpoint_path: str) -> None:
 
 def load_classifier(
     checkpoint_path: str, device: Optional[torch.device] = None
-) -> tuple[SmartBSClassifier, dict]:
+) -> tuple[torch.nn.Module, dict]:
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if not os.path.isfile(checkpoint_path):
         raise FileNotFoundError(checkpoint_path)
@@ -98,12 +123,22 @@ def load_classifier(
         payload = torch.load(checkpoint_path, map_location=device)
     cfg_dict = payload["config"]
     _assert_feature_spec_current(cfg_dict, checkpoint_path)
-    model = SmartBSClassifier(
-        num_inputs=cfg_dict["num_inputs"],
+    backbone = normalize_backbone(cfg_dict.get("backbone"))
+    ks = cfg_dict.get("kernel_size")
+    # V2 default kernel 7 if older/missing; classic keeps 3 via build_classifier
+    model = build_classifier(
+        num_inputs=int(cfg_dict["num_inputs"]),
         num_channels=list(cfg_dict["num_channels"]),
-        num_classes=cfg_dict.get("num_classes", 3),
-        kernel_size=cfg_dict.get("kernel_size", 3),
-        dropout=cfg_dict.get("dropout", 0.15),
+        num_classes=int(cfg_dict.get("num_classes", 3)),
+        kernel_size=None if ks is None else int(ks),
+        dropout=float(cfg_dict.get("dropout", 0.15)),
+        backbone=backbone,
+        num_inputs_15m=(
+            int(cfg_dict["num_inputs_15m"])
+            if cfg_dict.get("num_inputs_15m")
+            else None
+        ),
+        tf_ratio=int(cfg_dict.get("tf_ratio", 4) or 4),
     )
     model.load_state_dict(payload["model_state"])
     model.to(device)

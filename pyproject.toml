@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smartbs"
-version = "0.10.0"
+version = "0.11.0"
 description = "SmartBS modular ST engines + equal-weight blend + ONNX/MQL5 raw_ai"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -19,15 +19,19 @@ pip install -e ".[yahoo,tradingview,onnx,mt5]"   # optional feeds / export / MT5
 
 ## Engines
 
-| Engine | Channels | Live blend? |
-|--------|----------|-------------|
-| `maribbon` | 48 | yes |
-| `dbb` | 26 | yes (double BB 1h+15m; replaces retired `bollinger`) |
-| `trend_pullback` | 18 | yes |
-| `smart_money` | 22 | yes |
-| `macd` | 16 | yes |
-| `candle` | 20 | registered / train only |
-| `rsi_divergence` | 26 | registered / train only |
+| Engine | Core ch | +common | Live blend? |
+|--------|---------|---------|-------------|
+| `regime_engine` | 15 | 29 | yes |
+| `maribbon` | 48 | 62 | yes |
+| `dbb` | 32 | 46 | yes (double BB 1h+15m) |
+| `trend_pullback` | 18 | 32 | yes |
+| `smart_money` | 22 | 36 | yes |
+| `macd` | 16 | 30 | yes |
+| `candle` | 20 | 34 | registered / train only |
+| `rsi_divergence` | 26 | 40 | registered / train only |
+| `signals` | variable | +14 | signal bus |
+
+Every engine’s feature matrix ends with the shared **common** pack (14): OHLCV(1h) close-norm, time-of-day (no date), Tokyo/London/NY sessions, candle direction vs EMA14, near-term trend EMA14>EMA48.
 
 Live blend = equal-weight mean softmax over `ACTIVE_BLEND_ENGINES`, then argmax (`raw_ai`).
 

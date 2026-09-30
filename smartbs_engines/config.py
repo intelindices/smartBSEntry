@@ -80,15 +80,39 @@ class SmartBSConfig:
     binance_symbol: str = ""
     interval: str = "1h"
     lookback: int = 64
+    lookback_15m: int = 0  # 0 → lookback * tf_ratio (smartBSDualTF)
+    tf_ratio: int = 4  # 15m bars per 1h bar for DualTF alignment
+    num_inputs_15m: int = 0  # 0 → same as num_inputs (DualTF)
     horizon: int = 4
     return_threshold: float = 0.0015
     label_mode: str = "triple_barrier"
-    barrier_k: float = 2.0
-    barrier_horizon: int = 24
+    barrier_k: float = 1.0
+    barrier_horizon: int = 4
+    barrier_pct: float = 0.02  # pct_barrier ±fraction; session_direction defaults to 0.005
+    pivot_len: int = 5  # pivot_breakout lookback (bars L/R)
+    # session_direction: session open→close vs ±0.5% (LONG/SHORT/FLAT)
+    # session_trend: pred window [start−1h, end−1h); ±k*ATR first-touch (default k=2)
+    # day_trend: each 1h → today's NY session end close vs ±pct (default ±1%)
+    # pivot_breakout: first break of last unbroken pivot H/L within barrier_horizon (24)
+    # Session UTC windows for labels + common channels: normal (default) | adjusted
+    session_hours: str = "normal"
+    ma_len: int = 14  # MA+AI replay gate SMA (not a label mode)
     train_assets: List[str] = field(default_factory=lambda: ["XAUUSD"])
 
     feature_engine: str = "maribbon"
-    num_inputs: int = 48
+    # When feature_engine=all_blend: zero this source group at train+infer
+    # (leave-one-group-out ablation). Empty = full matrix. See ALL_BLEND_GROUPS.
+    ablation_zero_group: str = ""
+    # When feature_engine=signals: source engines (empty → ACTIVE_SIGNAL_SOURCES).
+    signal_engines: Tuple[str, ...] = field(default_factory=tuple)
+    # Modular pipeline plugs (see pipeline.PipelineSpec / signal_policy).
+    signal_policy: str = "none"  # none | onset_side | ma_decay
+    raw_ai_strategy: str = "ai_only"  # ai_only | signal_gate | signal_prior
+    signal_point_gate: bool = False  # legacy alias → signal_gate when True
+    signal_point_thr: float = 0.35
+    signal_point_require_agree: bool = True
+    backbone: str = "tcn"  # tcn(=smartBSEntry) | smartBSEntryV2 | smartBSTF | smartBSDualTF
+    num_inputs: int = 39
     num_channels: List[int] = field(default_factory=lambda: [32, 32, 48, 48])
     kernel_size: int = 3
     dropout: float = 0.25
@@ -100,7 +124,7 @@ class SmartBSConfig:
     learning_rate: float = 5e-4
     train_candles: int = 12000
     train_years: float = 10.0
-    train_from_date: str = "2022-06-14"
+    train_from_date: str = ""  # empty → 10y then 1h∩15m; set explicitly to force a floor
     train_align_15m: bool = True
     holdout_days: int = 0
     val_ratio: float = 0.15

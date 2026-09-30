@@ -1,13 +1,7 @@
 """TrendPullbackSTEngine — trend state plus depth of the current pullback.
 
-18 channels encoding EMA stack strength, vol regime, pullback depth on two
-horizons (20 and 48 bars), and continuous setup scores.
-
-v2 geometry:
-  - Soft stack scores instead of binary trend_up/trend_dn.
-  - ``atr_ratio`` = ATR14 / long ATR for spike/chop context (NATGAS).
-  - Parallel 48-bar retrace/depth for slower commodities.
-  - ``setup_long`` / ``setup_short`` = retrace × trend stack (replaces arm_*).
+15 channels: EMA stack, distances/slopes, retrace on two horizons, setup scores.
+Dropped ``atr_ratio`` (ablation-noisy), plus earlier ``depth_20`` / ``depth_48``.
 """
 
 from __future__ import annotations
@@ -15,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from smartbs_engines.registry import BaseSTEngine, EngineResult, safe_div, slope_norm
+from smartbs_engines.registry import BaseSTEngine, EngineResult, atr_unit, safe_div, slope_unit
 from smartbs_engines.structure import atr as _atr, ema as _ema
 
 EMA_FAST = 20
@@ -23,12 +17,10 @@ EMA_MID = 50
 EMA_SLOW = 200
 IMPULSE_WINDOW = 20
 IMPULSE_WINDOW_LONG = 48
-ATR_LONG = 100
 TREND_CLIP = 2.0
-
-
-def _clip_trend(x: np.ndarray) -> np.ndarray:
-    return np.clip(np.nan_to_num(x, nan=0.0), -TREND_CLIP, TREND_CLIP)
+DIST_CLIP = 2.0
+SLOPE_CLIP = 2.0
+SIZE_CLIP = 3.0
 
 
 def _pullback_block(
@@ -41,7 +33,7 @@ def _pullback_block(
     trend_up: np.ndarray,
     trend_dn: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Depth, retrace fraction, bars-since-extreme, and range/ATR for one window."""
+    """Retrace fraction, bars-since-extreme, impulse, and window range."""
     s_high = pd.Series(high)
     s_low = pd.Series(low)
     run_max = s_high.rolling(window, min_periods=1).max().to_numpy(dtype=np.float64)
@@ -64,8 +56,8 @@ def _pullback_block(
         span - 1 - idx_max,
         np.where(trend_dn, span - 1 - idx_min, 0.0),
     )
-    impulse = safe_div(rng, atr14)
-    return depth, retrace, bars_since / float(window), impulse, rng
+    impulse = atr_unit(rng, atr14, k=SIZE_CLIP)
+    return retrace, bars_since / float(window), impulse, rng
 
 
 class TrendPullbackSTEngine(BaseSTEngine):
@@ -73,24 +65,21 @@ class TrendPullbackSTEngine(BaseSTEngine):
     feature_names = [
         "stack_fast_mid",
         "stack_mid_slow",
-        "atr_ratio",
         "dist_fast",
         "dist_mid",
         "dist_slow",
         "slope_fast",
         "slope_mid",
         "slope_slow",
-        "depth_20",
         "retrace_20",
         "bars_since_20",
         "retrace_48",
-        "depth_48",
         "impulse_20",
         "impulse_vs_long",
         "setup_long",
         "setup_short",
     ]
-    warmup_bars = 3 * max(EMA_SLOW, IMPULSE_WINDOW_LONG, ATR_LONG)
+    warmup_bars = 3 * max(EMA_SLOW, IMPULSE_WINDOW_LONG)
 
     def compute(self, df: pd.DataFrame) -> EngineResult:
         close = df["close"].to_numpy(dtype=np.float64)
@@ -98,27 +87,19 @@ class TrendPullbackSTEngine(BaseSTEngine):
         low = df["low"].to_numpy(dtype=np.float64)
         n = len(close)
         atr14 = _atr(high, low, close, 14)
-        atr_long = (
-            pd.Series(atr14)
-            .rolling(ATR_LONG, min_periods=ATR_LONG)
-            .mean()
-            .to_numpy(dtype=np.float64)
-        )
-        atr_ratio = np.clip(safe_div(atr14, atr_long), 0.0, 3.0)
 
         fast = _ema(close, EMA_FAST)
         mid = _ema(close, EMA_MID)
         slow = _ema(close, EMA_SLOW)
 
-        stack_fast_mid = _clip_trend(safe_div(fast - mid, atr14))
-        stack_mid_slow = _clip_trend(safe_div(mid - slow, atr14))
+        stack_fast_mid = atr_unit(fast - mid, atr14, k=TREND_CLIP)
+        stack_mid_slow = atr_unit(mid - slow, atr14, k=TREND_CLIP)
         stack_sum = stack_fast_mid + stack_mid_slow
 
-        # Internal trend side for pullback geometry (stack still soft in outputs).
         trend_up = (fast > mid) & (mid > slow)
         trend_dn = (fast < mid) & (mid < slow)
 
-        d20, r20, bs20, imp20, rng20 = _pullback_block(
+        r20, bs20, imp20, rng20 = _pullback_block(
             high=high,
             low=low,
             close=close,
@@ -127,7 +108,7 @@ class TrendPullbackSTEngine(BaseSTEngine):
             trend_up=trend_up,
             trend_dn=trend_dn,
         )
-        d48, r48, _bs48, _imp48, rng48 = _pullback_block(
+        r48, _bs48, _imp48, rng48 = _pullback_block(
             high=high,
             low=low,
             close=close,
@@ -137,26 +118,23 @@ class TrendPullbackSTEngine(BaseSTEngine):
             trend_dn=trend_dn,
         )
 
-        bull_setup = np.clip(stack_sum, 0.0, TREND_CLIP) / TREND_CLIP
-        bear_setup = np.clip(-stack_sum, 0.0, TREND_CLIP) / TREND_CLIP
+        bull_setup = np.clip(stack_sum, 0.0, 1.0)
+        bear_setup = np.clip(-stack_sum, 0.0, 1.0)
         setup_long = np.clip(r20 * bull_setup, 0.0, 1.5)
         setup_short = np.clip(r20 * bear_setup, 0.0, 1.5)
 
         cols = [
             stack_fast_mid,
             stack_mid_slow,
-            atr_ratio,
-            safe_div(close - fast, atr14),
-            safe_div(close - mid, atr14),
-            safe_div(close - slow, atr14),
-            slope_norm(fast, atr14),
-            slope_norm(mid, atr14),
-            slope_norm(slow, atr14),
-            safe_div(d20, atr14),
+            atr_unit(close - fast, atr14, k=DIST_CLIP),
+            atr_unit(close - mid, atr14, k=DIST_CLIP),
+            atr_unit(close - slow, atr14, k=DIST_CLIP),
+            slope_unit(fast, atr14, k=SLOPE_CLIP),
+            slope_unit(mid, atr14, k=SLOPE_CLIP),
+            slope_unit(slow, atr14, k=SLOPE_CLIP),
             r20,
             bs20,
             r48,
-            safe_div(d48, atr14),
             imp20,
             np.clip(safe_div(rng20, rng48), 0.0, 3.0),
             setup_long,

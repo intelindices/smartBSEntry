@@ -18,3 +18,6 @@ mql5/Models/**
 !mql5/Models/README.md
 .venv/
 venv/
+*.log
+smartbs_engines/sweep_st/
+smartbs_engines/checkpoints*/

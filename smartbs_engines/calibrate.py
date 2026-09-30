@@ -26,6 +26,11 @@ def _is_1h_interval(interval: str | None) -> bool:
     return tag in ("1h", "60m", "60", "h1")
 
 
+def _is_15m_interval(interval: str | None) -> bool:
+    tag = str(interval or "").strip().lower()
+    return tag in ("15m", "15min", "m15")
+
+
 def trim_train_years(df_1h: pd.DataFrame, years: float) -> pd.DataFrame:
     if df_1h is None or len(df_1h) == 0 or years is None or float(years) <= 0.0:
         return df_1h
@@ -59,43 +64,57 @@ def trim_from_date(df_1h: pd.DataFrame, date_str: str) -> pd.DataFrame:
     return kept
 
 
+def _load_tf_cache(symbol: str, interval: str, data_source: str):
+    src = (data_source or "").lower()
+    sym = symbol.replace("/", "").upper()
+    if src in ("mt5", "metatrader", "broker"):
+        from smartbs_engines.mt5_data import load_mt5_klines
+
+        return load_mt5_klines(sym, interval, max_candles=None, refresh=False)
+    if src in ("dukascopy", "duka"):
+        from smartbs_engines.dukascopy import load_dukascopy_klines
+
+        return load_dukascopy_klines(sym, interval=interval, max_candles=None)
+    return None
+
+
 def trim_to_15m_start(
     df_1h: pd.DataFrame,
     symbol: str,
     *,
     data_source: str,
 ) -> pd.DataFrame:
-    """Clip 1h train series to first available 15m bar (parity with dBB / SM)."""
+    """Clip primary series to the first bar where **both** 1h and 15m exist.
+
+    Start = max(first_1h, first_15m). Works for 1h or 15m primary so both
+    TFs share the same calendar window ("same dataset").
+    """
     if df_1h is None or len(df_1h) == 0:
         return df_1h
-    src = (data_source or "").lower()
     sym = symbol.replace("/", "").upper()
-    m15 = None
     try:
-        if src in ("mt5", "metatrader", "broker"):
-            from smartbs_engines.mt5_data import load_mt5_klines
-
-            m15 = load_mt5_klines(sym, "15m", max_candles=None, refresh=False)
-        elif src in ("dukascopy", "duka"):
-            from smartbs_engines.dukascopy import load_dukascopy_klines
-
-            m15 = load_dukascopy_klines(sym, interval="15m", max_candles=None)
+        h1 = _load_tf_cache(sym, "1h", data_source)
+        m15 = _load_tf_cache(sym, "15m", data_source)
     except Exception as exc:
-        print(f"15m align skip ({sym}): {exc}")
+        print(f"1h∩15m align skip ({sym}): {exc}")
         return df_1h
-    if m15 is None or len(m15) == 0:
-        print(f"15m align skip ({sym}): no 15m cache")
+    if h1 is None or len(h1) == 0 or m15 is None or len(m15) == 0:
+        print(f"1h∩15m align skip ({sym}): missing 1h or 15m cache")
         return df_1h
-    start_ms = int(m15["open_time"].iloc[0])
+    h1_0 = int(h1["open_time"].iloc[0])
+    m15_0 = int(m15["open_time"].iloc[0])
+    start_ms = max(h1_0, m15_0, int(df_1h["open_time"].iloc[0]))
     before = len(df_1h)
     kept = df_1h[df_1h["open_time"] >= start_ms].reset_index(drop=True)
     if len(kept) == 0:
-        raise ValueError(f"15m align left zero 1h bars for {sym}")
+        raise ValueError(f"1h∩15m align left zero bars for {sym}")
     t0 = pd.to_datetime(int(kept["open_time"].iloc[0]), unit="ms", utc=True).date()
     t1 = pd.to_datetime(int(kept["open_time"].iloc[-1]), unit="ms", utc=True).date()
-    m15_0 = pd.to_datetime(start_ms, unit="ms", utc=True).date()
+    h1_d = pd.to_datetime(h1_0, unit="ms", utc=True).date()
+    m15_d = pd.to_datetime(m15_0, unit="ms", utc=True).date()
     print(
-        f"Aligned to 15m start {m15_0}: 1h train {t0} -> {t1} ({len(kept)}/{before} bars)"
+        f"Aligned to both 1h+15m (1h from {h1_d}, 15m from {m15_d}): "
+        f"train {t0} -> {t1} ({len(kept)}/{before} bars)"
     )
     return kept
 
@@ -135,22 +154,39 @@ def fetch_training_frame(symbol: str, cfg: SmartBSConfig) -> pd.DataFrame:
     interval = getattr(cfg, "interval", None) or "1h"
     years = float(getattr(cfg, "train_years", 0.0) or 0.0)
     max_bars = cfg.train_candles
-    if _is_1h_interval(interval) and years > 0.0:
+    use_years_window = (_is_1h_interval(interval) or _is_15m_interval(interval)) and years > 0.0
+    if use_years_window:
         max_bars = 0
-    df = fetch_mtf_klines(
-        symbol=spec.get("symbol", symbol),
-        source=source,
-        exchange=spec.get("exchange", "OANDA"),
-        max_1h_candles=max_bars,
-        binance_symbol=spec.get("binance_symbol"),
-    )
-    if _is_1h_interval(interval) and years > 0.0:
+    sym = spec.get("symbol", symbol)
+    if _is_15m_interval(interval):
+        from smartbs_engines.data import fetch_klines
+
+        print(f"Fetching 15m series ({max_bars} bars) from {source}...")
+        df = fetch_klines(
+            symbol=sym,
+            interval="15m",
+            max_candles=max_bars,
+            source=source,
+            exchange=spec.get("exchange", "OANDA"),
+            binance_symbol=spec.get("binance_symbol"),
+        )
+    else:
+        df = fetch_mtf_klines(
+            symbol=sym,
+            source=source,
+            exchange=spec.get("exchange", "OANDA"),
+            max_1h_candles=max_bars,
+            binance_symbol=spec.get("binance_symbol"),
+        )
+    if use_years_window:
         df = trim_train_years(df, years)
     from_date = str(getattr(cfg, "train_from_date", "") or "").strip()
-    if _is_1h_interval(interval) and from_date:
+    if (_is_1h_interval(interval) or _is_15m_interval(interval)) and from_date:
         df = trim_from_date(df, from_date)
-    if _is_1h_interval(interval) and bool(getattr(cfg, "train_align_15m", True)):
-        df = trim_to_15m_start(df, str(spec.get("symbol", symbol)), data_source=str(source))
+    if (_is_1h_interval(interval) or _is_15m_interval(interval)) and bool(
+        getattr(cfg, "train_align_15m", True)
+    ):
+        df = trim_to_15m_start(df, str(sym), data_source=str(source))
     return trim_holdout_tail(df, int(getattr(cfg, "holdout_days", 0) or 0))
 
 

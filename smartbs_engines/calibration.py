@@ -120,13 +120,14 @@ def collect_logits(
 ) -> tuple[np.ndarray, np.ndarray]:
     import torch
 
+    from smartbs_engines.model import model_forward
+
     model.eval()
     all_logits = []
     all_y = []
     with torch.no_grad():
         for x, y in loader:
-            x = x.to(device)
-            logits = model(x)
+            logits = model_forward(model, x, device)
             all_logits.append(logits.detach().cpu().numpy())
             all_y.append(y.numpy() if hasattr(y, "numpy") else np.asarray(y))
     if not all_logits:

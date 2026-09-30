@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from smartbs_engines.registry import BaseSTEngine, EngineResult, safe_div
+from smartbs_engines.registry import BaseSTEngine, EngineResult, atr_unit, safe_div
 from smartbs_engines.structure import atr as _atr
 
 RANGE_WINDOW = 50
@@ -120,8 +120,8 @@ class CandlePatternSTEngine(BaseSTEngine):
         reject_bull = np.clip(dn_wick_frac * (1.0 - body_frac) * close_pos, 0.0, 1.5)
         reject_bear = np.clip(up_wick_frac * (1.0 - body_frac) * (1.0 - close_pos), 0.0, 1.5)
 
-        wick_up_atr = safe_div(up_wick, atr14)
-        wick_dn_atr = safe_div(dn_wick, atr14)
+        wick_up_atr = atr_unit(up_wick, atr14, k=3.0)
+        wick_dn_atr = atr_unit(dn_wick, atr14, k=3.0)
 
         p_high, p_low = _prev(high), _prev(low)
         new_high = high > p_high
@@ -129,12 +129,12 @@ class CandlePatternSTEngine(BaseSTEngine):
         failed_break_up = np.clip(
             wick_up_atr * new_high.astype(np.float64) * (close < mid).astype(np.float64),
             0.0,
-            3.0,
+            1.0,
         )
         failed_break_dn = np.clip(
             wick_dn_atr * new_low.astype(np.float64) * (close > mid).astype(np.float64),
             0.0,
-            3.0,
+            1.0,
         )
 
         range_pos = _range_position(close, high, low, RANGE_WINDOW)
@@ -174,7 +174,7 @@ class CandlePatternSTEngine(BaseSTEngine):
             setup_reject_long,
             setup_reject_short,
             range_atr_z,
-            safe_div(body, atr14),
+            atr_unit(body, atr14, k=3.0),
             engulf_bull_score,
             engulf_bear_score,
         ]
