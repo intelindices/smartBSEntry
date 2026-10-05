@@ -1,31 +1,141 @@
 //+------------------------------------------------------------------+
-//| SmartBSEntry.mq5 — pivot_engine + every-bar raw_ai (default)     |
-//| Labels: pivot_breakout p5 (trained). Session_trade still available.|
+//| SmartBSEntry.mq5 — chart parity: all_blend + exit_arm + ST filter|
+//| pivot_breakout L=15 V2 | XAU/XAG/XTI/BTC/ETH                     |
 //+------------------------------------------------------------------+
 #property copyright "SmartBS"
-#property version   "3.34"
+#property version   "3.50"
 #property strict
-#property description "bar raw_ai + pivot_engine 12ch (pivot_breakout p5 V2). XAUUSD_pivot_engine.onnx"
+#property description "Chart parity: all_blend + exit_arm(SMA14) + ST filter(ATR15x3). pivot_breakout L=15 V2."
 
-
-// Ship commodity pivot_engine ONNX into Strategy Tester (Files/SmartBSEntry/).
+// ONNX + JSON sidecars for Strategy Tester (MQL5/Files/SmartBSEntry/).
+// Symbols: XAUUSD XAGUSD XTIUSD BTCUSD ETHUSD × all trained engines.
+#property tester_file "SmartBSEntry\\XAUUSD_all_blend.onnx"
+#property tester_file "SmartBSEntry\\XAUUSD_all_blend.json"
+#property tester_file "SmartBSEntry\\XAUUSD_candle.onnx"
+#property tester_file "SmartBSEntry\\XAUUSD_candle.json"
+#property tester_file "SmartBSEntry\\XAUUSD_common.onnx"
+#property tester_file "SmartBSEntry\\XAUUSD_common.json"
+#property tester_file "SmartBSEntry\\XAUUSD_dbb.onnx"
+#property tester_file "SmartBSEntry\\XAUUSD_dbb.json"
+#property tester_file "SmartBSEntry\\XAUUSD_macd.onnx"
+#property tester_file "SmartBSEntry\\XAUUSD_macd.json"
+#property tester_file "SmartBSEntry\\XAUUSD_maribbon.onnx"
+#property tester_file "SmartBSEntry\\XAUUSD_maribbon.json"
 #property tester_file "SmartBSEntry\\XAUUSD_pivot_engine.onnx"
 #property tester_file "SmartBSEntry\\XAUUSD_pivot_engine.json"
+#property tester_file "SmartBSEntry\\XAUUSD_regime_engine.onnx"
+#property tester_file "SmartBSEntry\\XAUUSD_regime_engine.json"
+#property tester_file "SmartBSEntry\\XAUUSD_rsi_divergence.onnx"
+#property tester_file "SmartBSEntry\\XAUUSD_rsi_divergence.json"
+#property tester_file "SmartBSEntry\\XAUUSD_signals.onnx"
+#property tester_file "SmartBSEntry\\XAUUSD_signals.json"
+#property tester_file "SmartBSEntry\\XAUUSD_smart_money.onnx"
+#property tester_file "SmartBSEntry\\XAUUSD_smart_money.json"
+#property tester_file "SmartBSEntry\\XAUUSD_trend_pullback.onnx"
+#property tester_file "SmartBSEntry\\XAUUSD_trend_pullback.json"
+#property tester_file "SmartBSEntry\\XAGUSD_all_blend.onnx"
+#property tester_file "SmartBSEntry\\XAGUSD_all_blend.json"
+#property tester_file "SmartBSEntry\\XAGUSD_candle.onnx"
+#property tester_file "SmartBSEntry\\XAGUSD_candle.json"
+#property tester_file "SmartBSEntry\\XAGUSD_common.onnx"
+#property tester_file "SmartBSEntry\\XAGUSD_common.json"
+#property tester_file "SmartBSEntry\\XAGUSD_dbb.onnx"
+#property tester_file "SmartBSEntry\\XAGUSD_dbb.json"
+#property tester_file "SmartBSEntry\\XAGUSD_macd.onnx"
+#property tester_file "SmartBSEntry\\XAGUSD_macd.json"
+#property tester_file "SmartBSEntry\\XAGUSD_maribbon.onnx"
+#property tester_file "SmartBSEntry\\XAGUSD_maribbon.json"
 #property tester_file "SmartBSEntry\\XAGUSD_pivot_engine.onnx"
 #property tester_file "SmartBSEntry\\XAGUSD_pivot_engine.json"
+#property tester_file "SmartBSEntry\\XAGUSD_regime_engine.onnx"
+#property tester_file "SmartBSEntry\\XAGUSD_regime_engine.json"
+#property tester_file "SmartBSEntry\\XAGUSD_rsi_divergence.onnx"
+#property tester_file "SmartBSEntry\\XAGUSD_rsi_divergence.json"
+#property tester_file "SmartBSEntry\\XAGUSD_signals.onnx"
+#property tester_file "SmartBSEntry\\XAGUSD_signals.json"
+#property tester_file "SmartBSEntry\\XAGUSD_smart_money.onnx"
+#property tester_file "SmartBSEntry\\XAGUSD_smart_money.json"
+#property tester_file "SmartBSEntry\\XAGUSD_trend_pullback.onnx"
+#property tester_file "SmartBSEntry\\XAGUSD_trend_pullback.json"
+#property tester_file "SmartBSEntry\\XTIUSD_all_blend.onnx"
+#property tester_file "SmartBSEntry\\XTIUSD_all_blend.json"
+#property tester_file "SmartBSEntry\\XTIUSD_candle.onnx"
+#property tester_file "SmartBSEntry\\XTIUSD_candle.json"
+#property tester_file "SmartBSEntry\\XTIUSD_common.onnx"
+#property tester_file "SmartBSEntry\\XTIUSD_common.json"
+#property tester_file "SmartBSEntry\\XTIUSD_dbb.onnx"
+#property tester_file "SmartBSEntry\\XTIUSD_dbb.json"
+#property tester_file "SmartBSEntry\\XTIUSD_macd.onnx"
+#property tester_file "SmartBSEntry\\XTIUSD_macd.json"
+#property tester_file "SmartBSEntry\\XTIUSD_maribbon.onnx"
+#property tester_file "SmartBSEntry\\XTIUSD_maribbon.json"
 #property tester_file "SmartBSEntry\\XTIUSD_pivot_engine.onnx"
 #property tester_file "SmartBSEntry\\XTIUSD_pivot_engine.json"
-#property tester_file "SmartBSEntry\\NATGAS_pivot_engine.onnx"
-#property tester_file "SmartBSEntry\\NATGAS_pivot_engine.json"
-#property tester_file "SmartBSEntry\\PLATINUM_pivot_engine.onnx"
-#property tester_file "SmartBSEntry\\PLATINUM_pivot_engine.json"
+#property tester_file "SmartBSEntry\\XTIUSD_regime_engine.onnx"
+#property tester_file "SmartBSEntry\\XTIUSD_regime_engine.json"
+#property tester_file "SmartBSEntry\\XTIUSD_rsi_divergence.onnx"
+#property tester_file "SmartBSEntry\\XTIUSD_rsi_divergence.json"
+#property tester_file "SmartBSEntry\\XTIUSD_signals.onnx"
+#property tester_file "SmartBSEntry\\XTIUSD_signals.json"
+#property tester_file "SmartBSEntry\\XTIUSD_smart_money.onnx"
+#property tester_file "SmartBSEntry\\XTIUSD_smart_money.json"
+#property tester_file "SmartBSEntry\\XTIUSD_trend_pullback.onnx"
+#property tester_file "SmartBSEntry\\XTIUSD_trend_pullback.json"
+#property tester_file "SmartBSEntry\\BTCUSD_all_blend.onnx"
+#property tester_file "SmartBSEntry\\BTCUSD_all_blend.json"
+#property tester_file "SmartBSEntry\\BTCUSD_candle.onnx"
+#property tester_file "SmartBSEntry\\BTCUSD_candle.json"
+#property tester_file "SmartBSEntry\\BTCUSD_common.onnx"
+#property tester_file "SmartBSEntry\\BTCUSD_common.json"
+#property tester_file "SmartBSEntry\\BTCUSD_dbb.onnx"
+#property tester_file "SmartBSEntry\\BTCUSD_dbb.json"
+#property tester_file "SmartBSEntry\\BTCUSD_macd.onnx"
+#property tester_file "SmartBSEntry\\BTCUSD_macd.json"
+#property tester_file "SmartBSEntry\\BTCUSD_maribbon.onnx"
+#property tester_file "SmartBSEntry\\BTCUSD_maribbon.json"
+#property tester_file "SmartBSEntry\\BTCUSD_pivot_engine.onnx"
+#property tester_file "SmartBSEntry\\BTCUSD_pivot_engine.json"
+#property tester_file "SmartBSEntry\\BTCUSD_regime_engine.onnx"
+#property tester_file "SmartBSEntry\\BTCUSD_regime_engine.json"
+#property tester_file "SmartBSEntry\\BTCUSD_rsi_divergence.onnx"
+#property tester_file "SmartBSEntry\\BTCUSD_rsi_divergence.json"
+#property tester_file "SmartBSEntry\\BTCUSD_signals.onnx"
+#property tester_file "SmartBSEntry\\BTCUSD_signals.json"
+#property tester_file "SmartBSEntry\\BTCUSD_smart_money.onnx"
+#property tester_file "SmartBSEntry\\BTCUSD_smart_money.json"
+#property tester_file "SmartBSEntry\\BTCUSD_trend_pullback.onnx"
+#property tester_file "SmartBSEntry\\BTCUSD_trend_pullback.json"
+#property tester_file "SmartBSEntry\\ETHUSD_all_blend.onnx"
+#property tester_file "SmartBSEntry\\ETHUSD_all_blend.json"
+#property tester_file "SmartBSEntry\\ETHUSD_candle.onnx"
+#property tester_file "SmartBSEntry\\ETHUSD_candle.json"
+#property tester_file "SmartBSEntry\\ETHUSD_common.onnx"
+#property tester_file "SmartBSEntry\\ETHUSD_common.json"
+#property tester_file "SmartBSEntry\\ETHUSD_dbb.onnx"
+#property tester_file "SmartBSEntry\\ETHUSD_dbb.json"
+#property tester_file "SmartBSEntry\\ETHUSD_macd.onnx"
+#property tester_file "SmartBSEntry\\ETHUSD_macd.json"
+#property tester_file "SmartBSEntry\\ETHUSD_maribbon.onnx"
+#property tester_file "SmartBSEntry\\ETHUSD_maribbon.json"
+#property tester_file "SmartBSEntry\\ETHUSD_pivot_engine.onnx"
+#property tester_file "SmartBSEntry\\ETHUSD_pivot_engine.json"
+#property tester_file "SmartBSEntry\\ETHUSD_regime_engine.onnx"
+#property tester_file "SmartBSEntry\\ETHUSD_regime_engine.json"
+#property tester_file "SmartBSEntry\\ETHUSD_rsi_divergence.onnx"
+#property tester_file "SmartBSEntry\\ETHUSD_rsi_divergence.json"
+#property tester_file "SmartBSEntry\\ETHUSD_signals.onnx"
+#property tester_file "SmartBSEntry\\ETHUSD_signals.json"
+#property tester_file "SmartBSEntry\\ETHUSD_smart_money.onnx"
+#property tester_file "SmartBSEntry\\ETHUSD_smart_money.json"
+#property tester_file "SmartBSEntry\\ETHUSD_trend_pullback.onnx"
+#property tester_file "SmartBSEntry\\ETHUSD_trend_pullback.json"
 #include <Trade\Trade.mqh>
 #include <SmartBSEntry\OnnxModel.mqh>
 #include <SmartBSEntry\FeatureDispatch.mqh>
 #include <SmartBSEntry\Softmax.mqh>
 #include <SmartBSEntry\RiskManager.mqh>
 
-#define SB_MAX_BLEND 7
+#define SB_MAX_BLEND 12
 
 enum ENUM_SB_SIGNAL_MODE
   {
@@ -35,8 +145,8 @@ enum ENUM_SB_SIGNAL_MODE
 
 enum ENUM_SB_TRADE_POLICY
   {
-   SB_TRADE_SESSION = 0, // session_trade: decide @ session open, hold to end (default)
-   SB_TRADE_BAR     = 1  // every H1: AI-only / onset / MA gates
+   SB_TRADE_SESSION = 0, // session_trade: decide @ session open, hold to end
+   SB_TRADE_BAR     = 1  // every H1: AI-only / onset / MA gates (default)
   };
 
 enum ENUM_SB_SESSION_HOURS
@@ -45,7 +155,9 @@ enum ENUM_SB_SESSION_HOURS
    SB_INP_SESS_ADJUSTED = 1  // Tokyo 0-7 / London 7-12 / NY 12-20
   };
 
-input string              InpEngines      = "pivot_engine"; // 12ch pivot_breakout p5 (V2)
+// Engines: all_blend,candle,common,dbb,macd,maribbon,pivot_engine,regime_engine,
+//          rsi_divergence,signals,smart_money,trend_pullback  (comma = avg blend)
+input string              InpEngines      = "all_blend"; // pivot_breakout L=15 V2 (115ch)
 input string              InpOnnxDir      = "SmartBSEntry\\"; // under MQL5/Files/
 input double              InpTemperature  = 0.0;       // 0 = sidecar JSON (match Python)
 input ENUM_SB_SIGNAL_MODE InpSignalMode   = SB_MODE_RAW_AI; // KEEP raw_ai
@@ -53,24 +165,31 @@ input double              InpAiThreshold  = 0.0;       // ignored under raw_ai
 input int                 InpLookback     = 64;
 input bool                InpOnlyClosedBar = true;
 input bool                InpTradeRawAi   = true;      // must stay true for tester/live sync
-input ENUM_SB_TRADE_POLICY InpTradePolicy = SB_TRADE_BAR; // every-bar = Python pivot replay
+input ENUM_SB_TRADE_POLICY InpTradePolicy = SB_TRADE_BAR; // every-bar = Python/chart replay
 input ENUM_SB_SESSION_HOURS InpSessionHours = SB_INP_SESS_NORMAL; // match Python --session-hours
-input double              InpLot          = 0.1;       // match Python XAU replay lot
+input double              InpLot          = 0.0;       // 0 = auto per asset (XAU0.1/XAG0.5/XTI0.1/BTC0.01/ETH0.1)
 input ulong               InpMagic        = 260911;
 input int                 InpSlippage     = 30;
-// --- Bar policy gates (OFF = raw_ai only, matches Python ai_only) ---
-input bool                InpSignalPointGate = false;  // OFF — raw_ai only
-input double              InpSignalPointThr  = 0.35;   // unused when gate OFF
-input bool                InpSignalPointAgree = true;  // unused when gate OFF
-input bool                InpMaAiGate     = false;     // OFF — raw_ai only
-input int                 InpFastMaLen    = 14;        // unused when MA gate OFF
-// --- Swing SL OFF (Python pivot replay has no SL) ---
-input bool                InpUseStopLoss  = false;     // OFF — raw_ai bar hold
+// --- Chart parity (index.html: exit_arm ON + ST filter ON) ---
+input bool                InpExitArm      = true;      // ON — hold until SMA14 confirms exit on AI FLAT/flip
+input bool                InpStFilter     = true;      // ON — long only ST bull; short only ST bear (clip)
+input int                 InpStAtrLen     = 15;        // match chart pivot_len ATR
+input double              InpStFactor     = 3.0;       // match chart ST factor
+// --- Bar policy gates (OFF under chart parity) ---
+input bool                InpSignalPointGate = false;  // OFF
+input double              InpSignalPointThr  = 0.35;
+input bool                InpSignalPointAgree = true;
+input bool                InpMaAiGate     = false;     // OFF (exit_arm is separate)
+input int                 InpFastMaLen    = 14;        // SMA for exit_arm / MA gate
+// --- Swing SL / BE / ladder (OFF = chart exit_arm+ST path) ---
+input bool                InpUseStopLoss  = false;     // OFF
 input bool                InpSLBE         = false;
-input bool                InpSLLadder     = false;input int                 InpSwingLen     = 9;         // pivot L/R
+input bool                InpSLLadder     = false;
+input int                 InpSwingLen     = 9;         // pivot L/R
 input int                 InpLadderMaxR   = 20;
 input double              InpBeOffsetR    = 0.08;
-input double              InpRMinAtr      = 0.25;
+input bool                InpValidateR    = false;     // OFF = geometry-only swing SL (no chase/ATR/pct)
+input double              InpRMinAtr      = 0.25;      // used only if InpValidateR
 input double              InpRMaxAtr      = 3.0;
 input double              InpRMaxPct      = 0.012;
 input double              InpChaseFrac    = 0.45;
@@ -97,6 +216,8 @@ int          g_sess_id = SB_SESS_NONE;
 datetime     g_sess_start_gmt = 0;
 int          g_sess_locked_cls = 0; // 0/1/2 at decision bar
 bool         g_sess_has_lock = false;
+// exit_arm logical book (±1/0). Broker pos may be flat under ST filter while this stays open.
+int          g_logical_have = 0;
 
 string SB_AssetStemFromChart(void)
   {
@@ -148,7 +269,13 @@ string SB_AssetStemFromChart(void)
 
 double SB_AutoLotForAsset(const string asset)
   {
-   // commodities + crypto = 0.01; forex = 0.1
+   // Match Python replay LOTS in _train_replay_all_st / chart meta.
+   if(asset == "XAUUSD" || asset == "XTIUSD" || asset == "ETHUSD")
+      return 0.1;
+   if(asset == "XAGUSD")
+      return 0.5;
+   if(asset == "BTCUSD")
+      return 0.01;
    if(asset == "EURUSD" || asset == "GBPUSD" || asset == "AUDUSD" ||
       asset == "USDCHF" || asset == "USDJPY")
       return 0.1;
@@ -248,11 +375,21 @@ void SB_UpdateComment(void)
       if(!g_models[i].Ready())
          eng_list += "!";
      }
-   string policy = (InpTradePolicy == SB_TRADE_SESSION) ? "session_trade" :
-                   (InpMaAiGate ? "MA+AI" : (InpSignalPointGate ? "signal_point" : "AI-only"));
+   string policy = "AI-only";
+   if(InpTradePolicy == SB_TRADE_SESSION)
+      policy = "session_trade";
+   else if(InpExitArm || InpStFilter)
+      policy = (InpExitArm && InpStFilter) ? "exit_arm+ST" :
+               (InpExitArm ? "exit_arm" : "ST");
+   else if(InpMaAiGate)
+      policy = "MA+AI";
+   else if(InpSignalPointGate)
+      policy = "signal_point";
    string sess = "";
    if(InpTradePolicy == SB_TRADE_SESSION)
       sess = StringFormat(" | %s lock=%s", SB_SessionName(g_sess_id), SB_ClassName(g_sess_locked_cls));
+   else if(InpExitArm || InpStFilter)
+      sess = StringFormat(" | logical=%s", (g_logical_have > 0 ? "LONG" : (g_logical_have < 0 ? "SHORT" : "FLAT")));
    string line = StringFormat(
       "SmartBS %d/%d | %s | lot=%.2f | %s | F=%.3f L=%.3f S=%.3f | %s%s | trade=%s%s",
       g_ready_n, g_n_engines, g_asset, g_trade_lot, SB_ClassName(g_last_cls),
@@ -383,7 +520,7 @@ bool SB_AttachSwingSL(const int side, const ulong ticket)
    string serr;
    double sl = 0.0, r = 0.0;
    if(!SB_MakeSwingStop(side, entry, InpSwingLen, InpRMinAtr, InpRMaxAtr,
-                        InpRMaxPct, InpChaseFrac, sl, r, serr))
+                        InpRMaxPct, InpChaseFrac, sl, r, serr, InpValidateR))
      {
       Print("Swing SL attach skip: ", serr);
       return false;
@@ -518,7 +655,7 @@ bool SB_OpenSide(const int want)
       string serr;
       double sl = 0.0, r = 0.0;
       if(!SB_MakeSwingStop(want, entry, InpSwingLen, InpRMinAtr, InpRMaxAtr,
-                           InpRMaxPct, InpChaseFrac, sl, r, serr))
+                           InpRMaxPct, InpChaseFrac, sl, r, serr, InpValidateR))
         {
          Print("Skip open (invalid R): ", serr);
          return false;
@@ -612,12 +749,98 @@ void SB_SyncMaAiGate(const int cls)
      }
   }
 
+// Chart parity: exit_arm (entry immediate; exit waits SMA14) + optional ST clip.
+// Logical book tracks exit_arm; broker is flat when ST disagrees (re-enter when ST agrees).
+void SB_SyncExitArmSt(const int cls)
+  {
+   int ai = 0;
+   if(cls == 1)
+      ai = 1;
+   else if(cls == 2)
+      ai = -1;
+
+   double c = 0.0, fma = 0.0;
+   string err = "";
+   if(InpExitArm)
+     {
+      if(!SB_ClosedBarFastMa(_Symbol, InpFastMaLen, c, fma, err))
+        {
+         Print("exit_arm MA: ", err);
+         return;
+        }
+     }
+
+   int have = g_logical_have;
+
+   // Exit when AI disagrees with open side (exit_arm waits for MA confirm).
+   if(have != 0 && ai != have)
+     {
+      if(InpExitArm && !SB_ExitMaConfirm(have, c, fma))
+        {
+         // hold logical through AI FLAT/flip until MA confirms
+        }
+      else
+        {
+         PrintFormat("exit_arm EXIT %s ai=%s close=%.5f sma=%.5f",
+                     (have > 0 ? "LONG" : "SHORT"), SB_ClassName(cls), c, fma);
+         have = 0;
+        }
+     }
+
+   // Flat logical book — enter immediately on AI side (entry_arm OFF).
+   if(have == 0 && ai != 0)
+     {
+      have = ai;
+      if(InpExitArm)
+         PrintFormat("exit_arm ENTER %s close=%.5f sma=%.5f",
+                     (have > 0 ? "LONG" : "SHORT"), c, fma);
+      else
+         PrintFormat("logical ENTER %s", (have > 0 ? "LONG" : "SHORT"));
+     }
+
+   g_logical_have = have;
+
+   // ST filter: broker only holds when SuperTrend agrees (ATR15×3 like chart).
+   int want = have;
+   int st_dir = 0;
+   if(InpStFilter && want != 0)
+     {
+      if(!SB_ClosedBarSuperTrendDir(_Symbol, InpStAtrLen, InpStFactor, st_dir, err))
+        {
+         Print("ST filter: ", err);
+         return;
+        }
+      if((want > 0 && st_dir != 1) || (want < 0 && st_dir != -1))
+        {
+         g_last_reason = StringFormat("st_clip_%s", (st_dir > 0 ? "bull" : "bear"));
+         want = 0;
+        }
+      else
+         g_last_reason = StringFormat("st_ok_%s", (st_dir > 0 ? "bull" : "bear"));
+     }
+
+   int broker = SB_CurrentPosDir();
+   if(want == broker)
+      return;
+   if(broker != 0)
+      SB_CloseOurPositions();
+   if(want == 0)
+      return;
+   SB_OpenSide(want);
+  }
+
 void SB_SyncTrade(const int cls)
   {
    if(!InpTradeRawAi)
       return;
    if(InpTradePolicy == SB_TRADE_SESSION)
       return; // handled in SB_SyncSessionTrade from OnTick
+   // Chart parity path (default): exit_arm + ST filter.
+   if(InpExitArm || InpStFilter)
+     {
+      SB_SyncExitArmSt(cls);
+      return;
+     }
    if(InpMaAiGate)
       SB_SyncMaAiGate(cls);
    else
@@ -736,8 +959,9 @@ int OnInit()
    PrintFormat("Session hours: %s",
                InpSessionHours == SB_INP_SESS_ADJUSTED ? "adjusted" : "normal");
    g_asset = SB_AssetStemFromChart();
+   g_logical_have = 0;
    g_trade_lot = SB_TradeLot();
-   PrintFormat("Asset=%s chart=%s lot=%.4f (InpLot=%.4f auto_comm/crypto=0.01 forex=0.1)",
+   PrintFormat("Asset=%s chart=%s lot=%.4f (InpLot=%.4f; 0=auto XAU/ETH/XTI=0.1 XAG=0.5 BTC=0.01)",
                g_asset, _Symbol, g_trade_lot, InpLot);
 
    // session_trade = raw_ai only (argmax). Threshold / onset / MA / SL are ignored.
@@ -760,12 +984,19 @@ int OnInit()
      }
    else
      {
-      Print("Mode: bar + raw_ai (every H1; pivot_breakout model default)");
+      PrintFormat("Mode: bar + raw_ai | exit_arm=%s ST_filter=%s(ATR%d×%.1f) | pivot_breakout L=15",
+                  (InpExitArm ? "ON" : "OFF"),
+                  (InpStFilter ? "ON" : "OFF"),
+                  InpStAtrLen, InpStFactor);
       if(!InpTradeRawAi)
         {
          Print("FATAL: InpTradeRawAi must be true for bar raw_ai backtest");
          return INIT_FAILED;
         }
+      if(InpMaAiGate && (InpExitArm || InpStFilter))
+         Print("WARN: InpMaAiGate ignored when exit_arm/ST filter enabled (chart parity)");
+      if(InpUseStopLoss && (InpExitArm || InpStFilter))
+         Print("WARN: chart parity path uses no SL — set InpUseStopLoss=false");
      }
 
    string parsed[];
@@ -834,11 +1065,12 @@ int OnInit()
       Comment("SmartBS: waiting for ONNX under ", InpOnnxDir, g_asset, "_*.onnx");
      }
    else
-      PrintFormat("Ready %d/%d for %s | policy=%s mode=%s thr=%.2f SL=%s",
+      PrintFormat("Ready %d/%d for %s | policy=%s exit_arm=%s ST=%s mode=%s SL=%s",
                   g_ready_n, g_n_engines, g_asset,
                   (InpTradePolicy == SB_TRADE_SESSION ? "session_trade" : "bar"),
+                  (InpExitArm ? "ON" : "OFF"),
+                  (InpStFilter ? "ON" : "OFF"),
                   (InpSignalMode == SB_MODE_RAW_AI ? "raw_argmax" : "ai_threshold"),
-                  InpAiThreshold,
                   (InpUseStopLoss ? "swing" : "OFF"));
    return INIT_SUCCEEDED;
   }
@@ -967,10 +1199,19 @@ void OnTick()
      }
    else
      {
-      PrintFormat("bar %s gate=%s %s reason=%s F=%.4f L=%.4f S=%.4f",
+      string gate = "raw_ai";
+      if(InpExitArm || InpStFilter)
+         gate = (InpExitArm && InpStFilter) ? "exit_arm+ST" :
+                (InpExitArm ? "exit_arm" : "ST");
+      else if(InpMaAiGate)
+         gate = "ma_ai";
+      else if(InpSignalPointGate)
+         gate = "signal_point";
+      PrintFormat("bar %s gate=%s %s logical=%d reason=%s F=%.4f L=%.4f S=%.4f",
                   (InpSignalMode == SB_MODE_RAW_AI ? "argmax" : "thr"),
-                  (InpMaAiGate ? "ma_ai" : (InpSignalPointGate ? "signal_point" : "raw_ai")),
+                  gate,
                   SB_ClassName(cls),
+                  g_logical_have,
                   (StringLen(g_last_reason) > 0 ? g_last_reason : "-"),
                   g_last_probs[0], g_last_probs[1], g_last_probs[2]);
       SB_SyncTrade(cls);

@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SmartBS Replay Chart</title>
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    :root {
+      --bg: #131722;
+      --panel: #1e222d;
+      --border: #2a2e39;
+      --text: #d1d4dc;
+      --muted: #787b86;
+      --green: #26a69a;
+      --red: #ef5350;
+      --accent: #2962ff;
+      --ma-fast: rgba(129, 212, 250, 0.3);
+      --ma-mid: rgba(38, 166, 154, 0.3);
+      --ma-slow: rgba(255, 167, 38, 0.3);
+      --ma-long: rgba(239, 83, 80, 0.3);
+      --st-up: rgba(0, 230, 118, 0.3);
+      --st-dn: rgba(255, 23, 68, 0.3);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; height: 100%;
+      background: var(--bg); color: var(--text);
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    #app { display: flex; flex-direction: column; height: 100%; }
+    header {
+      display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center;
+      padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
+    }
+    header h1 {
+      margin: 0; font-size: 14px; font-weight: 600; letter-spacing: 0.02em;
+      color: var(--text); margin-right: 8px;
+    }
+    label { color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    select, button {
+      background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 4px; padding: 5px 8px; font: inherit;
+    }
+    button { cursor: pointer; }
+    button:hover { border-color: var(--accent); color: #fff; }
+    #stats {
+      margin-left: auto; display: flex; flex-wrap: wrap; gap: 12px;
+      color: var(--muted); font-variant-numeric: tabular-nums;
+    }
+    #stats b { color: var(--text); font-weight: 600; }
+    #stats .up { color: var(--green); }
+    #stats .dn { color: var(--red); }
+    #charts { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    #equity { flex: 1; min-height: 120px; }
+    #legend {
+      display: flex; gap: 14px; padding: 6px 14px; color: var(--muted);
+      border-top: 1px solid var(--border); background: var(--panel);
+    }
+    #legend span::before {
+      content: ""; display: inline-block; width: 10px; height: 10px;
+      border-radius: 2px; margin-right: 6px; vertical-align: -1px;
+    }
+    #legend .c-fast::before { background: var(--ma-fast); }
+    #legend .c-mid::before { background: var(--ma-mid); }
+    #legend .c-slow::before { background: var(--ma-slow); }
+    #legend .c-malong::before { background: var(--ma-long); }
+    #legend .c-st-up::before { background: var(--st-up); }
+    #legend .c-st-dn::before { background: var(--st-dn); }
+    #legend .c-pos-long::before { background: var(--green); }
+    #legend .c-short::before { background: var(--red); }
+    #status { color: var(--muted); padding: 0 4px; }
+    #priceWrap { position: relative; flex: 3; min-height: 280px; border-bottom: 1px solid var(--border); }
+    #price { width: 100%; height: 100%; }
+    #hoverTip {
+      display: none; position: absolute; z-index: 30; pointer-events: none;
+      min-width: 140px; padding: 8px 10px; border-radius: 4px;
+      background: rgba(30, 34, 45, 0.96); border: 1px solid var(--border);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.35); font-variant-numeric: tabular-nums;
+    }
+    #hoverTip.show { display: block; }
+    #hoverTip .date { color: var(--muted); margin-bottom: 4px; }
+    #hoverTip .sig { font-size: 15px; font-weight: 700; letter-spacing: 0.04em; }
+    #hoverTip .sig.LONG { color: var(--green); }
+    #hoverTip .sig.SHORT { color: var(--red); }
+    #hoverTip .sig.FLAT { color: var(--muted); }
+    #hoverTip .probs {
+      margin-top: 3px; font-size: 11px; line-height: 1.35; color: var(--muted);
+      letter-spacing: 0.01em;
+    }
+    #hoverTip .probs .LONG { color: var(--green); }
+    #hoverTip .probs .SHORT { color: var(--red); }
+    #hoverTip .probs .FLAT { color: #9aa0a6; }
+    #hoverTip .pos { margin-top: 4px; color: var(--muted); font-size: 11px; }
+    #hoverTip .ohlc { margin-top: 6px; color: var(--muted); font-size: 11px; }
+    #tradeList {
+      max-height: 160px; overflow: auto; border-top: 1px solid var(--border);
+      background: var(--panel); font-variant-numeric: tabular-nums;
+    }
+    #tradeList table { width: 100%; border-collapse: collapse; }
+    #tradeList th, #tradeList td {
+      text-align: left; padding: 4px 10px; border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    #tradeList th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--panel); }
+    #tradeList tr:hover td { background: #252a37; cursor: pointer; }
+    .up { color: var(--green); }
+    .dn { color: var(--red); }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>SmartBS Replay</h1>
+      <label>Symbol <select id="symbol"></select></label>
+      <label>Label <select id="labelMode"></select></label>
+      <label>Engine <select id="engine"></select></label>
+      <label>Window <select id="days"></select></label>
+      <label title="On AI FLAT/flip, hold until SMA14 confirms exit (close&lt;SMA for long, close&gt;SMA for short)">
+        <input type="checkbox" id="exitArm" checked />
+        exit_arm (SMA14)
+      </label>
+      <label title="AI onset entry + swing SL + SLBE + ladder. While in trade, raw AI flips/FLAT are ignored — exit only on SL (no R validation).">
+        <input type="checkbox" id="slLadder" />
+        SL ladder
+      </label>
+      <label title="Keep long only on ST-bull bars, short only on ST-bear bars. Trades opened against ST are clipped until ST agrees (not dropped).">
+        <input type="checkbox" id="stFilter" checked />
+        ST filter
+      </label>
+      <button id="reload" title="Reload catalog">Reload</button>
+      <span id="status">Loading…</span>
+      <div id="stats"></div>
+    </header>
+    <div id="charts">
+      <div id="priceWrap">
+        <div id="price"></div>
+        <div id="hoverTip"></div>
+      </div>
+      <div id="equity"></div>
+    </div>
+    <div id="legend">
+      <span class="c-fast">EMA Fast 14</span>
+      <span class="c-mid">EMA Mid 48</span>
+      <span class="c-slow">EMA Slow 120</span>
+      <span class="c-malong">SMA Long 180</span>
+      <span class="c-st-up" id="legendSt">SuperTrend (L×3)</span>
+      <span class="c-pos-long">Long trade</span>
+      <span class="c-short">Short trade</span>
+      <span>▲ entry · ● exit · solid = win · dotted = loss</span>
+      <span>SL ladder: onset entry · swing SL → BE@1R → trail · AI flips ignored · exit only on SL</span>
+      <span>ST filter: clip to ST-aligned bars (line starts when ST agrees)</span>
+      <span>exit_arm: delay flatten until SMA14 confirms</span>
+    </div>
+    <div id="tradeList"><table>
+      <thead><tr>
+        <th>#</th><th>Side</th><th>Entry</th><th>Exit</th><th>Entry px</th><th>Exit px</th><th>PnL</th><th>Cum</th>
+      </tr></thead>
+      <tbody id="tradeBody"></tbody>
+    </table></div>
+  </div>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let catalog = { items: [] };
+    let priceChart, equityChart;
+    let candleSeries, maFastSeries, maMidSeries, maSlowSeries, maLongSeries;
+    let equitySeries;
+    let tradeLineSeries = [];
+    let stSegmentSeries = [];
+    let currentData = null;
+    const ST_FACTOR = 3;
+    let signalByTime = new Map();
+    let probsByTime = new Map();
+    let posByTime = new Map();
+    let candleByTime = new Map();
+
+    function fmtTime(sec) {
+      const d = new Date(sec * 1000);
+      return d.toISOString().replace("T", " ").slice(0, 16);
+    }
+    function fmtDate(sec) {
+      const d = new Date(sec * 1000);
+      return d.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+    }
+    function fmtProb(x) {
+      if (x == null || Number.isNaN(Number(x))) return "—";
+      return Number(x).toFixed(2);
+    }
+    function pickProbs(obj) {
+      if (!obj) return null;
+      const pFlat = obj.pFlat ?? obj.p_flat ?? obj.flat;
+      const pLong = obj.pLong ?? obj.p_long ?? obj.long;
+      const pShort = obj.pShort ?? obj.p_short ?? obj.short;
+      if (pFlat == null && pLong == null && pShort == null) return null;
+      return {
+        FLAT: Number(pFlat) || 0,
+        LONG: Number(pLong) || 0,
+        SHORT: Number(pShort) || 0,
+      };
+    }
+    function fmtPx(x) {
+      if (x == null || Number.isNaN(x)) return "—";
+      return Math.abs(x) >= 100 ? x.toFixed(2) : x.toFixed(5);
+    }
+
+    /**
+     * Wilder ATR + SuperTrend.
+     * Returns { segs, dirByTime } — segs for plot; dirByTime: time → +1 bull / −1 bear.
+     */
+    function computeSupertrend(candles, length, factor) {
+      const n = candles.length;
+      const segs = [];
+      const dirByTime = new Map();
+      if (n === 0 || length < 1) return { segs, dirByTime };
+      const atr = new Array(n);
+      let prevClose = candles[0].close;
+      atr[0] = Math.max(0, candles[0].high - candles[0].low);
+      const alpha = 1 / length;
+      for (let i = 1; i < n; i++) {
+        const h = candles[i].high;
+        const l = candles[i].low;
+        const c = candles[i].close;
+        const tr = Math.max(h - l, Math.abs(h - prevClose), Math.abs(l - prevClose));
+        atr[i] = alpha * tr + (1 - alpha) * atr[i - 1];
+        prevClose = c;
+      }
+      let finalUb = 0.5 * (candles[0].high + candles[0].low) + factor * atr[0];
+      let finalLb = 0.5 * (candles[0].high + candles[0].low) - factor * atr[0];
+      let dir = 1;
+      dirByTime.set(candles[0].time, 1);
+      let cur = { dir: 1, points: [{ time: candles[0].time, value: finalLb }] };
+      for (let i = 1; i < n; i++) {
+        const h = candles[i].high;
+        const l = candles[i].low;
+        const c = candles[i].close;
+        const hl2 = 0.5 * (h + l);
+        const basicUb = hl2 + factor * atr[i];
+        const basicLb = hl2 - factor * atr[i];
+        const prevC = candles[i - 1].close;
+        const prevUb = finalUb;
+        const prevLb = finalLb;
+        finalUb = (basicUb < prevUb || prevC > prevUb) ? basicUb : prevUb;
+        finalLb = (basicLb > prevLb || prevC < prevLb) ? basicLb : prevLb;
+        if (c > prevUb) dir = 1;
+        else if (c < prevLb) dir = -1;
+        dirByTime.set(candles[i].time, dir);
+        const val = dir === 1 ? finalLb : finalUb;
+        const pt = { time: candles[i].time, value: val };
+        if (dir !== cur.dir) {
+          if (cur.points.length) segs.push(cur);
+          cur = { dir, points: [pt] };
+        } else {
+          cur.points.push(pt);
+        }
+      }
+      if (cur.points.length) segs.push(cur);
+      return { segs, dirByTime };
+    }
+
+    function clearStSegments() {
+      for (const s of stSegmentSeries) priceChart.removeSeries(s);
+      stSegmentSeries = [];
+    }
+
+    function stParams(data) {
+      const L = Math.max(1, Number((data.meta || {}).pivot_len) || 15);
+      return { L, factor: ST_FACTOR };
+    }
+
+    function applySupertrend(data) {
+      if (!priceChart) return;
+      clearStSegments();
+      const candles = data.candles || [];
+      const { L, factor } = stParams(data);
+      const { segs } = computeSupertrend(candles, L, factor);
+      for (const seg of segs) {
+        // Bull → green lower band only; bear → red upper band only.
+        const series = priceChart.addLineSeries({
+          color: seg.dir === 1 ? "rgba(0, 230, 118, 0.3)" : "rgba(255, 23, 68, 0.3)",
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        series.setData(seg.points);
+        stSegmentSeries.push(series);
+      }
+      const el = $("legendSt");
+      if (el) el.textContent = `SuperTrend ATR${L}×${factor}`;
+    }
+
+    /**
+     * ST-gate held bars (not whole trades).
+     * A short opened while ST was still bull is clipped until ST turns bear;
+     * the remaining segment keeps the open–close line on aligned candles.
+     */
+    function filterTradesBySupertrend(trades, candles, length, factor, meta) {
+      const { dirByTime } = computeSupertrend(candles || [], length, factor);
+      const bars = candles || [];
+      const idxByTime = new Map(bars.map((c, i) => [c.time, i]));
+      const lot = Number((meta || {}).lot) || 0.1;
+      const pv = Number((meta || {}).point_value) || 1;
+      const kept = [];
+      let cum = 0;
+      for (const t of trades || []) {
+        const want = t.side === "long" ? 1 : -1;
+        const i0 = idxByTime.get(t.entryTime);
+        const i1 = idxByTime.get(t.exitTime);
+        if (i0 == null) continue;
+        const end = i1 == null ? bars.length : i1;
+        let runStart = -1;
+        const flush = (runEnd) => {
+          if (runStart < 0) return;
+          const a = bars[runStart];
+          const hitsOrigExit = runEnd >= end;
+          const exitBar = hitsOrigExit
+            ? (i1 != null ? bars[i1] : bars[runEnd - 1])
+            : bars[runEnd];
+          const entryPx = Number(a.open);
+          const exitPx = hitsOrigExit
+            ? Number(t.exitPrice)
+            : Number(exitBar && exitBar.open != null ? exitBar.open : bars[runEnd - 1].close);
+          const exitT = hitsOrigExit ? t.exitTime : exitBar.time;
+          const pnl = want * (exitPx - entryPx) * lot * pv;
+          cum += pnl;
+          kept.push({
+            ...t,
+            entryTime: a.time,
+            exitTime: exitT,
+            entryPrice: entryPx,
+            exitPrice: exitPx,
+            pnl,
+            pnlCum: cum,
+            stDir: want === 1 ? "bull" : "bear",
+          });
+          runStart = -1;
+        };
+        for (let i = i0; i < end; i++) {
+          const d = dirByTime.get(bars[i].time);
+          const ok = (want === 1 && d === 1) || (want === -1 && d === -1);
+          if (ok) {
+            if (runStart < 0) runStart = i;
+          } else {
+            flush(i);
+          }
+        }
+        flush(end);
+      }
+      return kept;
+    }
+    function fmtPnl(x) {
+      const s = (x >= 0 ? "+" : "") + x.toFixed(2);
+      return s;
+    }
+
+    // EA defaults: swing pivot L/R=9, ladder max 20R, BE offset 0.08R.
+    const SL_SWING_LEN = 9;
+    const SL_LADDER_MAX_R = 20;
+    const SL_BE_OFFSET_R = 0.08;
+
+    function pivotExtrema(values, left, right, wantHigh) {
+      const n = values.length;
+      const out = new Array(n).fill(NaN);
+      for (let i = left + right; i < n; i++) {
+        const pivot = i - right;
+        let extreme = values[pivot - left];
+        let arg = 0;
+        for (let k = 1; k <= left + right; k++) {
+          const v = values[pivot - left + k];
+          if (wantHigh ? v > extreme : v < extreme) {
+            extreme = v;
+            arg = k;
+          }
+        }
+        const ok = wantHigh
+          ? values[pivot] >= extreme - 1e-15 && arg === left
+          : values[pivot] <= extreme + 1e-15 && arg === left;
+        if (ok) out[i] = values[pivot];
+      }
+      return out;
+    }
+
+    function valueWhen(src) {
+      const out = new Array(src.length);
+      let last = NaN;
+      for (let i = 0; i < src.length; i++) {
+        if (Number.isFinite(src[i])) last = src[i];
+        out[i] = last;
+      }
+      return out;
+    }
+
+    function swingLevels(highs, lows, swingLen) {
+      const ph = pivotExtrema(highs, swingLen, swingLen, true);
+      const pl = pivotExtrema(lows, swingLen, swingLen, false);
+      return { sh: valueWhen(ph), sl: valueWhen(pl) };
+    }
+
+    /** Geometry-only swing stop (no chase / ATR / pct R validation). */
+    function makeSwingStopNoValidate(side, entry, swingHigh, swingLow) {
+      if (!side || !Number.isFinite(entry)) return null;
+      if (!Number.isFinite(swingHigh) || !Number.isFinite(swingLow)) return null;
+      if (side > 0) {
+        if (!(swingLow < entry)) return null;
+        return { sl: swingLow, r: entry - swingLow };
+      }
+      if (!(swingHigh > entry)) return null;
+      return { sl: swingHigh, r: swingHigh - entry };
+    }
+
+    function updateSlLadder(side, entry, r, rung, stop, fav) {
+      if (!(r > 0) || !(fav > 0)) return { rung, stop };
+      let k = Math.floor(fav / r);
+      if (k > SL_LADDER_MAX_R) k = SL_LADDER_MAX_R;
+      if (k < 1) return { rung, stop };
+      const beOff = Math.max(0, Math.min(SL_BE_OFFSET_R, 0.5)) * r;
+      let want = k;
+      let target = stop;
+      if (want === 1) target = entry + side * beOff;
+      else target = entry + side * (want - 1) * r;
+      if (want <= rung) return { rung, stop };
+      // Only ratchet stop in trade direction.
+      if (side > 0 && !(target > stop)) return { rung, stop };
+      if (side < 0 && !(target < stop)) return { rung, stop };
+      return { rung: want, stop: target };
+    }
+
+    /**
+     * AI onset entry + swing SL + SLBE + SL ladder.
+     * While in a trade, raw AI flips/FLAT are ignored — exit only on SL.
+     * Re-entry needs a fresh AI onset after exit (stale flip during hold is ignored).
+     */
+    function simulateSlLadderTrades(candles, meta) {
+      const n = candles.length;
+      if (n < SL_SWING_LEN * 2 + 2) return [];
+      const highs = candles.map((c) => c.high);
+      const lows = candles.map((c) => c.low);
+      const { sh, sl } = swingLevels(highs, lows, SL_SWING_LEN);
+      const lot = Number(meta.lot) || 0.1;
+      const pv = Number(meta.point_value) || 1;
+      const scale = lot * pv;
+      const sigOf = (c) => {
+        const s = String(c.signal || "").toUpperCase();
+        if (s === "LONG" || s === "1") return 1;
+        if (s === "SHORT" || s === "2") return -1;
+        return 0;
+      };
+
+      const trades = [];
+      let have = 0;
+      let stop = NaN;
+      let entryPx = 0;
+      let entryT = 0;
+      let entryI = -1;
+      let r = 0;
+      let rung = 0;
+      let cum = 0;
+      let prevAi = 0; // tracks AI for onset; updated even while in trade
+
+      const closeTrade = (exitT, exitPx, reason) => {
+        if (have === 0 || entryI < 0) return;
+        const pnl = have * (exitPx - entryPx) * scale;
+        cum += pnl;
+        trades.push({
+          side: have > 0 ? "long" : "short",
+          entryTime: entryT,
+          exitTime: exitT,
+          entryPrice: entryPx,
+          exitPrice: exitPx,
+          pnl,
+          pnlCum: cum,
+          exitReason: reason || "sl",
+        });
+        have = 0;
+        stop = NaN;
+        r = 0;
+        rung = 0;
+        entryI = -1;
+      };
+
+      for (let i = 0; i < n - 1; i++) {
+        const ai = sigOf(candles[i]);
+
+        if (have !== 0) {
+          // In trade: ignore raw AI flip / FLAT — only manage SL ladder.
+          if (Number.isFinite(stop)) {
+            const fav =
+              have > 0
+                ? candles[i].high - entryPx
+                : entryPx - candles[i].low;
+            const up = updateSlLadder(have, entryPx, r, rung, stop, fav);
+            rung = up.rung;
+            stop = up.stop;
+            let hit = false;
+            let exitPx = stop;
+            if (have > 0 && candles[i].low <= stop) hit = true;
+            else if (have < 0 && candles[i].high >= stop) hit = true;
+            if (hit) closeTrade(candles[i].time, exitPx, "sl");
+          }
+          prevAi = ai;
+          continue;
+        }
+
+        // Flat: enter only on AI onset (new side), not level-hold / mid-trade flip residue.
+        const onset = ai !== 0 && ai !== prevAi;
+        prevAi = ai;
+        if (!onset) continue;
+        const entry = candles[i + 1].open;
+        const sw = makeSwingStopNoValidate(ai, entry, sh[i], sl[i]);
+        if (!sw) continue;
+        have = ai;
+        stop = sw.sl;
+        r = sw.r;
+        rung = 0;
+        entryPx = entry;
+        entryT = candles[i + 1].time;
+        entryI = i + 1;
+      }
+      if (have !== 0 && entryI >= 0) {
+        closeTrade(candles[n - 1].time, candles[n - 1].open, "eod");
+      }
+      return trades;
+    }
+
+    /** Step equity from filtered trade exits (aligned to candle times). */
+    function equityFromTrades(candles, trades) {
+      if (!candles || !candles.length) return [];
+      const byExit = new Map();
+      for (const t of trades) {
+        byExit.set(t.exitTime, (byExit.get(t.exitTime) || 0) + (Number(t.pnl) || 0));
+      }
+      let eq = 0;
+      return candles.map((c) => {
+        if (byExit.has(c.time)) eq += byExit.get(c.time);
+        return { time: c.time, value: eq };
+      });
+    }
+
+    function activeTradesAndEquity(data) {
+      const useExit = $("exitArm").checked && Array.isArray(data.tradesExitArm);
+      const useSl = $("slLadder").checked;
+      const useSt = $("stFilter").checked;
+      let trades = useSl
+        ? simulateSlLadderTrades(data.candles || [], data.meta || {})
+        : useExit
+          ? (data.tradesExitArm || [])
+          : (data.trades || []);
+      const rawCount = trades.length;
+      if (useSt) {
+        const { L, factor } = stParams(data);
+        trades = filterTradesBySupertrend(trades, data.candles, L, factor, data.meta || {});
+      }
+      const rebuilt = useSl || useSt;
+      return {
+        trades,
+        equity: rebuilt
+          ? equityFromTrades(data.candles, trades)
+          : (useExit
+              ? (data.equityExitArm || equityFromTrades(data.candles, trades))
+              : (data.equity || equityFromTrades(data.candles, trades))),
+        slLadder: useSl,
+        exitArm: useExit && !useSl,
+        stFilter: useSt,
+        rawCount,
+      };
+    }
+
+    function unique(items, key) {
+      return [...new Set(items.map((i) => i[key]))].sort((a, b) => {
+        if (typeof a === "number") return a - b;
+        return String(a).localeCompare(String(b));
+      });
+    }
+
+    function itemLabel(i) {
+      return String(i.label_mode || i.labelMode || "unknown").trim().toLowerCase();
+    }
+
+    function fillSelects() {
+      const items = catalog.items || [];
+      const sym = $("symbol").value;
+      const lab = $("labelMode").value;
+      const eng = $("engine").value;
+      const days = $("days").value;
+
+      const symbols = unique(items, "symbol");
+      $("symbol").innerHTML = symbols.map((s) => `<option value="${s}">${s}</option>`).join("");
+      if (symbols.includes(sym)) $("symbol").value = sym;
+      else if (symbols.includes("XAUUSD")) $("symbol").value = "XAUUSD";
+
+      const symNow = $("symbol").value;
+      const labels = [...new Set(
+        items.filter((i) => i.symbol === symNow).map(itemLabel)
+      )].sort((a, b) => a.localeCompare(b));
+      const labelCounts = {};
+      for (const i of items.filter((x) => x.symbol === symNow)) {
+        const k = itemLabel(i);
+        labelCounts[k] = (labelCounts[k] || 0) + 1;
+      }
+      $("labelMode").innerHTML = labels.map((l) => {
+        const n = labelCounts[l] || 0;
+        return `<option value="${l}">${l} (${n})</option>`;
+      }).join("");
+      if (labels.includes(lab)) $("labelMode").value = lab;
+      else if (labels.includes("pivot_breakout")) $("labelMode").value = "pivot_breakout";
+      else if (labels.length) $("labelMode").value = labels[0];
+
+      const labNow = $("labelMode").value;
+      const engines = unique(
+        items.filter((i) => i.symbol === symNow && itemLabel(i) === labNow),
+        "engine"
+      );
+      $("engine").innerHTML = engines.map((e) => `<option value="${e}">${e}</option>`).join("");
+      if (engines.includes(eng)) $("engine").value = eng;
+      else if (engines.includes("maribbon")) $("engine").value = "maribbon";
+
+      const engNow = $("engine").value;
+      const dayOpts = unique(
+        items.filter(
+          (i) => i.symbol === symNow && itemLabel(i) === labNow && i.engine === engNow
+        ),
+        "days"
+      );
+      $("days").innerHTML = dayOpts.map((d) => `<option value="${d}">${d}d</option>`).join("");
+      if (dayOpts.map(String).includes(String(days))) $("days").value = days;
+      else if (dayOpts.includes(360)) $("days").value = "360";
+    }
+
+    function currentItem() {
+      const s = $("symbol").value;
+      const lm = $("labelMode").value;
+      const e = $("engine").value;
+      const d = Number($("days").value);
+      return (catalog.items || []).find(
+        (i) =>
+          i.symbol === s &&
+          itemLabel(i) === lm &&
+          i.engine === e &&
+          Number(i.days) === d
+      );
+    }
+
+    function buildSignalMaps(data, trades) {
+      signalByTime = new Map();
+      probsByTime = new Map();
+      candleByTime = new Map();
+      posByTime = new Map();
+      const candles = data.candles || [];
+      for (const c of candles) {
+        candleByTime.set(c.time, c);
+        posByTime.set(c.time, "FLAT");
+        if (c.signal) signalByTime.set(c.time, String(c.signal).toUpperCase());
+        const pr = pickProbs(c);
+        if (pr) probsByTime.set(c.time, pr);
+      }
+      for (const s of data.signals || []) {
+        if (!s || s.time == null) continue;
+        if (s.signal != null) signalByTime.set(s.time, String(s.signal).toUpperCase());
+        const pr = pickProbs(s);
+        if (pr) probsByTime.set(s.time, pr);
+      }
+      for (const t of trades || []) {
+        const label = t.side === "long" ? "LONG" : "SHORT";
+        for (const c of candles) {
+          if (c.time >= t.entryTime && c.time < t.exitTime) posByTime.set(c.time, label);
+        }
+      }
+    }
+
+    function hideHoverTip() {
+      $("hoverTip").classList.remove("show");
+    }
+
+    function probsHtml(pr) {
+      if (!pr) {
+        return `<div class="probs">LONG:—  SHORT:—  FLAT:—</div>`;
+      }
+      return `<div class="probs">` +
+        `<span class="LONG">LONG:${fmtProb(pr.LONG)}</span>  ` +
+        `<span class="SHORT">SHORT:${fmtProb(pr.SHORT)}</span>  ` +
+        `<span class="FLAT">FLAT:${fmtProb(pr.FLAT)}</span>` +
+        `</div>`;
+    }
+
+    function showHoverTip(param) {
+      const tip = $("hoverTip");
+      if (!param || param.time == null || !param.point || param.point.x < 0 || param.point.y < 0) {
+        hideHoverTip();
+        return;
+      }
+      // Lightweight-charts may pass BusinessDay objects; normalize to unix sec.
+      const t = typeof param.time === "number"
+        ? param.time
+        : (param.time && param.time.timestamp != null ? param.time.timestamp : null);
+      if (t == null) {
+        hideHoverTip();
+        return;
+      }
+      const c = candleByTime.get(t) || param.seriesData.get(candleSeries);
+      if (!c) {
+        hideHoverTip();
+        return;
+      }
+      const pr = probsByTime.get(t) || pickProbs(candleByTime.get(t)) || pickProbs(c);
+      const hasAi = signalByTime.size > 0 || !!pr;
+      const pos = posByTime.get(t) || "FLAT";
+      let ai = hasAi ? (signalByTime.get(t) || "FLAT") : pos;
+      if (pr) {
+        ai = Object.entries(pr).sort((a, b) => b[1] - a[1])[0][0];
+      }
+      tip.innerHTML = `
+        <div class="date">${fmtDate(t)}</div>
+        <div class="sig ${ai}">${ai}</div>
+        ${probsHtml(pr)}
+        <div class="pos">Pos ${pos}</div>
+        <div class="ohlc">O ${fmtPx(c.open)} · H ${fmtPx(c.high)} · L ${fmtPx(c.low)} · C ${fmtPx(c.close)}</div>
+      `;
+      tip.classList.add("show");
+      const wrap = $("priceWrap");
+      const tw = tip.offsetWidth || 150;
+      const th = tip.offsetHeight || 70;
+      let x = param.point.x + 16;
+      let y = param.point.y + 16;
+      if (x + tw > wrap.clientWidth - 8) x = param.point.x - tw - 12;
+      if (y + th > wrap.clientHeight - 8) y = param.point.y - th - 12;
+      tip.style.left = Math.max(8, x) + "px";
+      tip.style.top = Math.max(8, y) + "px";
+    }
+
+    function ensureCharts() {
+      if (priceChart) return;
+      const common = {
+        layout: {
+          background: { type: "solid", color: "#131722" },
+          textColor: "#d1d4dc",
+        },
+        grid: {
+          vertLines: { color: "#1f2330" },
+          horzLines: { color: "#1f2330" },
+        },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: "#2a2e39" },
+        timeScale: { borderColor: "#2a2e39", timeVisible: true, secondsVisible: false },
+      };
+      priceChart = LightweightCharts.createChart($("price"), {
+        ...common,
+        height: $("price").clientHeight,
+      });
+      equityChart = LightweightCharts.createChart($("equity"), {
+        ...common,
+        height: $("equity").clientHeight,
+      });
+      candleSeries = priceChart.addCandlestickSeries({
+        upColor: "#26a69a",
+        downColor: "#ef5350",
+        borderUpColor: "#26a69a",
+        borderDownColor: "#ef5350",
+        wickUpColor: "#26a69a",
+        wickDownColor: "#ef5350",
+      });
+      const maOpts = { priceLineVisible: false, lastValueVisible: false };
+      maFastSeries = priceChart.addLineSeries({ color: "rgba(129, 212, 250, 0.3)", lineWidth: 1, ...maOpts });
+      maMidSeries = priceChart.addLineSeries({ color: "rgba(38, 166, 154, 0.3)", lineWidth: 1, ...maOpts });
+      maSlowSeries = priceChart.addLineSeries({ color: "rgba(255, 167, 38, 0.3)", lineWidth: 1, ...maOpts });
+      maLongSeries = priceChart.addLineSeries({ color: "rgba(239, 83, 80, 0.3)", lineWidth: 2, ...maOpts });
+      equitySeries = equityChart.addAreaSeries({
+        lineColor: "#2962ff",
+        topColor: "rgba(41,98,255,0.35)",
+        bottomColor: "rgba(41,98,255,0.02)",
+        lineWidth: 2,
+      });
+      priceChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+        if (!range) return;
+        equityChart.timeScale().setVisibleLogicalRange(range);
+      });
+      equityChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+        if (!range) return;
+        priceChart.timeScale().setVisibleLogicalRange(range);
+      });
+      priceChart.subscribeCrosshairMove(showHoverTip);
+      $("price").addEventListener("mouseleave", hideHoverTip);
+      window.addEventListener("resize", () => {
+        priceChart.applyOptions({ height: $("price").clientHeight, width: $("price").clientWidth });
+        equityChart.applyOptions({ height: $("equity").clientHeight, width: $("equity").clientWidth });
+      });
+    }
+
+    function clearTradeLines() {
+      for (const s of tradeLineSeries) priceChart.removeSeries(s);
+      tradeLineSeries = [];
+    }
+
+    function renderTrades(trades) {
+      clearTradeLines();
+      const markers = [];
+      for (const t of trades) {
+        const long = t.side === "long";
+        const color = long ? "#26a69a" : "#ef5350";
+        markers.push({
+          time: t.entryTime,
+          position: long ? "belowBar" : "aboveBar",
+          color,
+          shape: long ? "arrowUp" : "arrowDown",
+          text: long ? "L" : "S",
+        });
+        markers.push({
+          time: t.exitTime,
+          position: long ? "aboveBar" : "belowBar",
+          color,
+          shape: "circle",
+          text: "x",
+        });
+        const win = Number(t.pnl) >= 0;
+        const line = priceChart.addLineSeries({
+          color,
+          lineWidth: 2,
+          lineStyle: win
+            ? LightweightCharts.LineStyle.Solid
+            : LightweightCharts.LineStyle.Dotted,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        line.setData([
+          { time: t.entryTime, value: t.entryPrice },
+          { time: t.exitTime, value: t.exitPrice },
+        ]);
+        tradeLineSeries.push(line);
+      }
+      markers.sort((a, b) => a.time - b.time || a.text.localeCompare(b.text));
+      candleSeries.setMarkers(markers);
+
+      const body = $("tradeBody");
+      body.innerHTML = trades.map((t, i) => {
+        const cls = t.pnl >= 0 ? "up" : "dn";
+        return `<tr data-i="${i}">
+          <td>${i + 1}</td>
+          <td class="${t.side === "long" ? "up" : "dn"}">${t.side}</td>
+          <td>${fmtTime(t.entryTime)}</td>
+          <td>${fmtTime(t.exitTime)}</td>
+          <td>${fmtPx(t.entryPrice)}</td>
+          <td>${fmtPx(t.exitPrice)}</td>
+          <td class="${cls}">${fmtPnl(t.pnl)}</td>
+          <td>${fmtPnl(t.pnlCum)}</td>
+        </tr>`;
+      }).join("");
+      body.querySelectorAll("tr").forEach((tr) => {
+        tr.addEventListener("click", () => {
+          const t = trades[Number(tr.dataset.i)];
+          if (!t) return;
+          priceChart.timeScale().setVisibleRange({
+            from: t.entryTime - 3 * 3600,
+            to: t.exitTime + 3 * 3600,
+          });
+        });
+      });
+    }
+
+    function renderStats(meta, view) {
+      const trades = view.trades || [];
+      const wins = trades.filter((t) => t.pnl > 0).length;
+      const pnl = trades.reduce((s, t) => s + (Number(t.pnl) || 0), 0);
+      const wr = trades.length ? (100 * wins) / trades.length : 0;
+      const pnlCls = pnl >= 0 ? "up" : "dn";
+      const thr = meta.ai_threshold != null ? Number(meta.ai_threshold) : null;
+      const thrPct = thr != null ? `${(thr * 100).toFixed(0)}%` : "—";
+      const slTag = view.slLadder
+        ? `<span>SL ladder <b>ON</b> (swing${SL_SWING_LEN}+BE+ladder)</span>`
+        : `<span>SL ladder <b>OFF</b></span>`;
+      const armTag = view.exitArm
+        ? `<span>exit_arm <b>ON</b> (SMA${meta.arm_sma || 14})</span>`
+        : `<span>exit_arm <b>OFF</b></span>`;
+      const stTag = view.stFilter
+        ? `<span>ST filter <b>ON</b> (${trades.length}/${view.rawCount})</span>`
+        : `<span>ST filter <b>OFF</b></span>`;
+      const L = meta.pivot_len != null ? Number(meta.pivot_len) : null;
+      const labelTag = meta.label_mode
+        ? (L != null ? `${meta.label_mode} L=${L}` : meta.label_mode)
+        : "—";
+      $("stats").innerHTML = `
+        <span>AI thr <b>${thrPct}</b></span>
+        ${armTag}
+        ${slTag}
+        ${stTag}
+        <span>Label <b>${labelTag}</b></span>
+        <span>Backbone <b>${meta.backbone || "—"}</b></span>
+        <span>Trades <b>${trades.length}</b></span>
+        <span>WR <b>${wr.toFixed(1)}%</b></span>
+        <span>PnL <b class="${pnlCls}">${fmtPnl(pnl)}</b></span>
+      `;
+    }
+
+    function applyView() {
+      if (!currentData) return;
+      const view = activeTradesAndEquity(currentData);
+      buildSignalMaps(currentData, view.trades);
+      equitySeries.setData(view.equity);
+      renderTrades(view.trades);
+      renderStats(currentData.meta || {}, view);
+    }
+
+    async function loadSeries() {
+      const item = currentItem();
+      if (!item) {
+        $("status").textContent = "No series for selection";
+        return;
+      }
+      $("status").textContent = `Loading ${item.file}…`;
+      const res = await fetch(item.file + "?t=" + Date.now());
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${item.file}`);
+      const data = await res.json();
+      currentData = data;
+      ensureCharts();
+      candleSeries.setData(data.candles || []);
+      const ma = data.ma || {};
+      maFastSeries.setData(ma.fast || ma.ma14 || []);
+      maMidSeries.setData(ma.mid || ma.ma48 || []);
+      maSlowSeries.setData(ma.slow || []);
+      maLongSeries.setData(ma.long || []);
+      applySupertrend(data);
+      applyView();
+      priceChart.timeScale().fitContent();
+      equityChart.timeScale().fitContent();
+      const lm = item.label_mode || (currentData.meta || {}).label_mode || "";
+      const L = (currentData.meta || {}).pivot_len;
+      const lab = lm === "pivot_breakout" && L != null ? `${lm} L=${L}` : lm;
+      $("status").textContent = `${item.symbol} · ${lab} · ${item.engine} · ${item.days}d`;
+    }
+
+    async function loadCatalog() {
+      $("status").textContent = "Loading catalog…";
+      const res = await fetch("catalog.json?t=" + Date.now());
+      if (!res.ok) throw new Error("catalog.json missing — run _export_replay_chart first");
+      catalog = await res.json();
+      fillSelects();
+      await loadSeries();
+    }
+
+    ["symbol", "labelMode", "engine", "days"].forEach((id) => {
+      $(id).addEventListener("change", async () => {
+        if (id === "symbol" || id === "labelMode" || id === "engine") fillSelects();
+        try { await loadSeries(); }
+        catch (e) { $("status").textContent = String(e.message || e); }
+      });
+    });
+    $("reload").addEventListener("click", () => loadCatalog().catch((e) => {
+      $("status").textContent = String(e.message || e);
+    }));
+    ["exitArm", "slLadder", "stFilter"].forEach((id) => {
+      $(id).addEventListener("change", () => {
+        try { applyView(); }
+        catch (e) { $("status").textContent = String(e.message || e); }
+      });
+    });
+
+    loadCatalog().catch((e) => {
+      $("status").textContent = String(e.message || e);
+    });
+  </script>
+</body>
+</html>

@@ -21,3 +21,6 @@ venv/
 *.log
 smartbs_engines/sweep_st/
 smartbs_engines/checkpoints*/
+smartbs_engines/replay_chart/data/
+smartbs_engines/replay_chart/catalog.json
+mql5/Files/**

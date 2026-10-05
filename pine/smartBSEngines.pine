@@ -35,11 +35,15 @@ colShort = #EF5350
 colMr9   = #81D4FA
 colMr14  = #4FC3F7
 colMr24  = #29B6F6
-colMr40  = #26A69A
-colMr60  = #66BB6A
-colMr100 = #FFA726
-colMr160 = #FF7043
-colMr240 = #EF5350
+colMr36  = #26A69A
+colMr48  = #66BB6A
+colMr60  = #9CCC65
+colMr72  = #FFEE58
+colMr84  = #FFA726
+colMr96  = #FF7043
+colMr120 = #EF5350
+colMr180 = #E53935
+colMr240 = #C62828
 
 // Fixed to Python constants (exposed for audit only)
 grpConst = "Python constants (parity)"
@@ -124,36 +128,70 @@ f_structure(int swingLen, int decayCap) =>
     [chochUp, chochDn, bosUp, bosDn, chochUpDec, chochDnDec, bosUpDec, bosDnDec, sweepUp, sweepDn, fvgProxUp, fvgProxDn, sh, sl]
 
 // ═══════════════════════════════════════════════════════════════════════
-// 1) maribbon_*
+// 1) maribbon_*  (12 EMAs; stack signals match Python _extract_maribbon)
 // ═══════════════════════════════════════════════════════════════════════
 mr9 = ta.ema(close, 9)
 mr14 = ta.ema(close, 14)
 mr24 = ta.ema(close, 24)
-mr40 = ta.ema(close, 40)
+mr36 = ta.ema(close, 36)
+mr48 = ta.ema(close, 48)
 mr60 = ta.ema(close, 60)
-mr100 = ta.ema(close, 100)
-mr160 = ta.ema(close, 160)
+mr72 = ta.ema(close, 72)
+mr84 = ta.ema(close, 84)
+mr96 = ta.ema(close, 96)
+mr120 = ta.ema(close, 120)
+mr180 = ta.ema(close, 180)
 mr240 = ta.ema(close, 240)
-f_dir(float ema) => f_clip((close - ema) / atr14, -2.0, 2.0)
-dirSum = f_dir(mr9) + f_dir(mr14) + f_dir(mr24) + f_dir(mr40) + f_dir(mr60) + f_dir(mr100) + f_dir(mr160) + f_dir(mr240)
-maribbon_fan_bull = f_clip01(dirSum / 16.0)
-maribbon_fan_bear = f_clip01((-dirSum) / 16.0)
-rsiN = ta.rsi(close, 14) / 100.0
-rsi = ta.rsi(close, 14)
-rsi_to_band = rsi < 30 ? (30 - rsi) / 20.0 : rsi > 70 ? (rsi - 70) / 20.0 : 0.0
-maribbon_rsi_overbought = f_clip01(math.max(rsi_to_band, 0.0) * (rsiN > 0.5 ? 1.0 : 0.0))
-maribbon_rsi_oversold = f_clip01(math.max(rsi_to_band, 0.0) * (rsiN < 0.5 ? 1.0 : 0.0))
-maribbon_long = maribbon_fan_bull
-maribbon_short = maribbon_fan_bear
 
-// Fan: short EMAs cooler → long EMAs warmer (visual ribbon).
+f_pair_bull(int p) =>
+    p == 0 ? mr9 > mr14 : p == 1 ? mr14 > mr24 : p == 2 ? mr24 > mr36 : p == 3 ? mr36 > mr48 : p == 4 ? mr48 > mr60 : p == 5 ? mr60 > mr72 : p == 6 ? mr72 > mr84 : p == 7 ? mr84 > mr96 : p == 8 ? mr96 > mr120 : p == 9 ? mr120 > mr180 : mr180 > mr240
+
+f_consec_stack(bool fromFast) =>
+    float cnt = 0.0
+    float sgn = 0.0
+    if fromFast
+        for p = 0 to 10
+            float s = f_pair_bull(p) ? 1.0 : -1.0
+            if sgn == 0.0
+                sgn := s
+                cnt := 1.0
+            else if s == sgn
+                cnt += 1.0
+            else
+                break
+    else
+        for p = 10 to 0 by -1
+            float s = f_pair_bull(p) ? 1.0 : -1.0
+            if sgn == 0.0
+                sgn := s
+                cnt := 1.0
+            else if s == sgn
+                cnt += 1.0
+            else
+                break
+    sgn * cnt
+
+dir_s = f_consec_stack(true)
+trend_s = f_consec_stack(false)
+full_s = f_pair_bull(0) and f_pair_bull(1) and f_pair_bull(2) and f_pair_bull(3) and f_pair_bull(4) and f_pair_bull(5) and f_pair_bull(6) and f_pair_bull(7) and f_pair_bull(8) and f_pair_bull(9) and f_pair_bull(10) ? 1.0 : not f_pair_bull(0) and not f_pair_bull(1) and not f_pair_bull(2) and not f_pair_bull(3) and not f_pair_bull(4) and not f_pair_bull(5) and not f_pair_bull(6) and not f_pair_bull(7) and not f_pair_bull(8) and not f_pair_bull(9) and not f_pair_bull(10) ? -1.0 : 0.0
+r_point = full_s == 1.0 and nz(full_s[1], 0.0) != 1.0 ? 1.0 : full_s == -1.0 and nz(full_s[1], 0.0) != -1.0 ? -1.0 : nz(full_s[1], 0.0) == 1.0 and full_s != 1.0 ? -1.0 : nz(full_s[1], 0.0) == -1.0 and full_s != -1.0 ? 1.0 : 0.0
+bull_stk = math.max(dir_s, 0.0) + math.max(trend_s, 0.0) + math.max(r_point, 0.0) * 11.0
+bear_stk = math.max(-dir_s, 0.0) + math.max(-trend_s, 0.0) + math.max(-r_point, 0.0) * 11.0
+maribbon_long = f_clip01(bull_stk / 22.0)
+maribbon_short = f_clip01(bear_stk / 22.0)
+
+// Ribbon: short EMAs cooler → long EMAs warmer.
 plot(plotMR and showMR ? mr9 : na, "MR EMA9", color=colMr9, linewidth=1)
 plot(plotMR and showMR ? mr14 : na, "MR EMA14", color=colMr14, linewidth=1)
 plot(plotMR and showMR ? mr24 : na, "MR EMA24", color=colMr24, linewidth=1)
-plot(plotMR and showMR ? mr40 : na, "MR EMA40", color=colMr40, linewidth=1)
+plot(plotMR and showMR ? mr36 : na, "MR EMA36", color=colMr36, linewidth=1)
+plot(plotMR and showMR ? mr48 : na, "MR EMA48", color=colMr48, linewidth=1)
 plot(plotMR and showMR ? mr60 : na, "MR EMA60", color=colMr60, linewidth=1)
-plot(plotMR and showMR ? mr100 : na, "MR EMA100", color=colMr100, linewidth=1)
-plot(plotMR and showMR ? mr160 : na, "MR EMA160", color=colMr160, linewidth=1)
+plot(plotMR and showMR ? mr72 : na, "MR EMA72", color=colMr72, linewidth=1)
+plot(plotMR and showMR ? mr84 : na, "MR EMA84", color=colMr84, linewidth=1)
+plot(plotMR and showMR ? mr96 : na, "MR EMA96", color=colMr96, linewidth=1)
+plot(plotMR and showMR ? mr120 : na, "MR EMA120", color=colMr120, linewidth=1)
+plot(plotMR and showMR ? mr180 : na, "MR EMA180", color=colMr180, linewidth=1)
 plot(plotMR and showMR ? mr240 : na, "MR EMA240", color=colMr240, linewidth=2)
 
 plotshape(not markTurnsOnly and showMR and f_cross_on(maribbon_long), title="maribbon_long", style=shape.diamond, location=location.belowbar, color=colLong, size=size.tiny, text="M", textcolor=color.white)

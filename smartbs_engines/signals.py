@@ -195,14 +195,15 @@ def _extract_regime_engine(feats: np.ndarray, names: list[str]) -> dict[str, np.
 
 
 def _extract_maribbon(feats: np.ndarray, names: list[str]) -> dict[str, np.ndarray]:
-    # Fan bias from ATR dists (close−ema9 + early fan spreads).
-    dists = [_col(feats, names, f"dist_ema{k}") for k in (9, 14, 24, 40, 60, 100)]
-    dist_sum = sum(dists)
-    fan_bull = _clip01(dist_sum / 12.0)
-    fan_bear = _clip01((-dist_sum) / 12.0)
+    # Stack bias from 1h direction/trend strength (±11) + r_point pulse.
+    ds = _col(feats, names, "direction_strength")
+    ts = _col(feats, names, "trend_strength")
+    rp = _col(feats, names, "r_point")
+    bull = np.maximum(ds, 0.0) + np.maximum(ts, 0.0) + np.maximum(rp, 0.0) * 11.0
+    bear = np.maximum(-ds, 0.0) + np.maximum(-ts, 0.0) + np.maximum(-rp, 0.0) * 11.0
     return {
-        "maribbon_long": fan_bull,
-        "maribbon_short": fan_bear,
+        "maribbon_long": _clip01(bull / 22.0),
+        "maribbon_short": _clip01(bear / 22.0),
     }
 
 

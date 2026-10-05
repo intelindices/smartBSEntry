@@ -72,6 +72,7 @@ DEFAULT_DUMP_ASSETS = (
     "PLATINUM",
     "BTCUSD",
     "ETHUSD",
+    "BCHUSD",
     "LTCUSD",
     "ADAUSD",
     "SOLUSD",
@@ -81,7 +82,7 @@ DEFAULT_DUMP_ASSETS = (
     "USDCHF",
     "USDJPY",
 )
-DEFAULT_DUMP_INTERVALS = ("15m", "1h", "4h")
+DEFAULT_DUMP_INTERVALS = ("5m", "15m", "1h", "4h")
 
 DEFAULT_TRAIN_ASSETS = DEFAULT_DUMP_ASSETS
 
@@ -360,7 +361,7 @@ def dump_symbol(
             if span is not None and path is not None and span + 1e-9 >= want_years:
                 print(
                     f"  skip {symbol} {tf}: cache already {span:.2f}y "
-                    f"(need {want_years:g}y) → {path.name}",
+                    f"(need {want_years:g}y) -> {path.name}",
                     flush=True,
                 )
                 try:
@@ -371,7 +372,7 @@ def dump_symbol(
                 continue
 
         max_n = _max_candles_for_years(tf, want_years or 10.0)
-        print(f"  copying {symbol} {tf} (max≈{max_n})…", flush=True)
+        print(f"  copying {symbol} {tf} (max~{max_n})...", flush=True)
         df = load_mt5_klines(symbol, tf, max_candles=max_n, refresh=True)
         n = 0 if df is None else len(df)
         counts[tf] = n
@@ -398,7 +399,7 @@ def dump_assets(
     if skip_existing and min_years > 0:
         print(f"Skip if cache span >= {min_years:g}y", flush=True)
     for sym in symbols:
-        print(f"Dumping {sym} from MetaTrader 5…", flush=True)
+        print(f"Dumping {sym} from MetaTrader 5...", flush=True)
         try:
             out[sym] = dump_symbol(
                 sym,
@@ -444,7 +445,7 @@ def main() -> None:
     min_years = float(args.min_years)
     skip_existing = bool(args.skip_existing)
     if args.symbol.strip():
-        print(f"Dumping {args.symbol} from MetaTrader 5…", flush=True)
+        print(f"Dumping {args.symbol} from MetaTrader 5...", flush=True)
         print(f"Cache dir: {CACHE_DIR}")
         dump_symbol(
             args.symbol.strip(),

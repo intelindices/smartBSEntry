@@ -151,9 +151,10 @@ def engine_num_inputs(name: str) -> int:
 
 
 class MARibbonSTEngine(BaseSTEngine):
-    """11 EMAs -> 26 channels (distance, slope, RSI)."""
+    """12 EMAs → 13 base × (1h + 15m + 5m) = 39 channels; no common pack."""
 
     name = "maribbon"
+    _attach_common = False
 
     def __init__(self) -> None:
         from smartbs_engines.maribbon_engine import (
@@ -164,10 +165,19 @@ class MARibbonSTEngine(BaseSTEngine):
         self.feature_names = list(MARIBBON_FEATURE_NAMES)
         self.warmup_bars = int(MARIBBON_WARMUP_BARS)
 
-    def compute(self, df: pd.DataFrame) -> EngineResult:
+    def compute(
+        self,
+        df: pd.DataFrame,
+        *,
+        symbol: str | None = None,
+        data_source: str | None = None,
+        frames: dict | None = None,
+    ) -> EngineResult:
         from smartbs_engines.maribbon_engine import compute_maribbon_engine
 
-        eng = compute_maribbon_engine(df)
+        eng = compute_maribbon_engine(
+            df, symbol=symbol, data_source=data_source, frames=frames
+        )
         return EngineResult(features=eng.features, valid_from=eng.valid_from)
 
 

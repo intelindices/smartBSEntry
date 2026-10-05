@@ -45,6 +45,7 @@ LOTS = {
     "PLATINUM": 0.1,
     "BTCUSD": 0.01,
     "ETHUSD": 0.1,
+    "BCHUSD": 0.1,
     "LTCUSD": 0.1,
     "ADAUSD": 1.0,
     "SOLUSD": 0.1,
@@ -62,6 +63,7 @@ PVS = {
     "PLATINUM": 1.0,
     "BTCUSD": 1.0,
     "ETHUSD": 1.0,
+    "BCHUSD": 1.0,
     "LTCUSD": 1.0,
     "ADAUSD": 1.0,
     "SOLUSD": 1.0,
@@ -739,7 +741,7 @@ def train_one(
     ma_len: int = 14,
     barrier_pct: float = 0.02,
     session_hours: str = "normal",
-    pivot_len: int = 5,
+    pivot_len: int = 15,
     interval: str = "1h",
     backbone: str = "tcn",
     kernel_size: int | None = None,
@@ -868,14 +870,14 @@ def main() -> None:
         "--barrier-horizon",
         type=int,
         default=4,
-        help="triple_barrier / pct_barrier / pivot_breakout horizon bars "
-        "(pivot_breakout default 24 when left at 4)",
+        help="triple_barrier / pct_barrier horizon bars "
+        "(ignored for pivot_breakout; that mode uses --pivot-len)",
     )
     ap.add_argument(
         "--pivot-len",
         type=int,
-        default=5,
-        help="pivot_breakout lookback L/R (default 5)",
+        default=15,
+        help="pivot_breakout rolling window + forward scan length L (default 15)",
     )
     ap.add_argument(
         "--barrier-pct",
@@ -1040,11 +1042,10 @@ def main() -> None:
             f"(session_hours={args.session_hours})"
         )
     elif label_mode == "pivot_breakout":
-        raw_h = int(args.barrier_horizon)
-        hor = 24 if raw_h == 4 else raw_h
+        plen = int(args.pivot_len)
         label_desc = (
-            f"pivot_breakout last unbroken pivot H/L break "
-            f"within {hor} bars (pivot_len={args.pivot_len})"
+            f"pivot_breakout rolling L={plen} extremes "
+            f"(immediate update or first break within {plen} bars)"
         )
     else:
         label_desc = f"triple_barrier k={args.barrier_k:g} horizon={args.barrier_horizon}"

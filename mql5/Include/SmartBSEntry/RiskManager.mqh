@@ -93,6 +93,54 @@ bool SB_ExitMaConfirm(const int position, const double close_px, const double fm
    return false;
   }
 
+// SuperTrend direction at last closed H1 (+1 bull / -1 bear).
+// Matches replay_chart/index.html (Wilder ATR length × factor; default 15×3).
+bool SB_ClosedBarSuperTrendDir(const string symbol, const int atr_len,
+                               const double factor, int &dir_out, string &err)
+  {
+   err = "";
+   dir_out = 1;
+   const int L = MathMax(1, atr_len);
+   const double f = (factor > 0.0) ? factor : 3.0;
+   SBOhlc h1;
+   int need = MathMax(L * 20 + 64, 400);
+   if(!SB_CopyRatesChrono(symbol, PERIOD_H1, need, h1))
+     {
+      err = "st: not enough H1";
+      return false;
+     }
+   if(h1.n < L + 3)
+     {
+      err = "st: warm-up";
+      return false;
+     }
+   int end = h1.n - 2; // last closed bar
+   if(end < 1)
+      end = h1.n - 1;
+   double atr[];
+   SB_ATR(h1.high, h1.low, h1.close, L, atr);
+   double final_ub = 0.5 * (h1.high[0] + h1.low[0]) + f * atr[0];
+   double final_lb = 0.5 * (h1.high[0] + h1.low[0]) - f * atr[0];
+   int dir = 1;
+   for(int i = 1; i <= end; i++)
+     {
+      double hl2 = 0.5 * (h1.high[i] + h1.low[i]);
+      double bub = hl2 + f * atr[i];
+      double blb = hl2 - f * atr[i];
+      double prev_c = h1.close[i - 1];
+      double prev_ub = final_ub;
+      double prev_lb = final_lb;
+      final_ub = (bub < prev_ub || prev_c > prev_ub) ? bub : prev_ub;
+      final_lb = (blb > prev_lb || prev_c < prev_lb) ? blb : prev_lb;
+      if(h1.close[i] > prev_ub)
+         dir = 1;
+      else if(h1.close[i] < prev_lb)
+         dir = -1;
+     }
+   dir_out = dir;
+   return true;
+  }
+
 // ATR(14) at last closed H1 bar.
 bool SB_ClosedBarAtr(const string symbol, const int atr_len, double &atr_out, string &err)
   {
@@ -117,11 +165,12 @@ bool SB_ClosedBarAtr(const string symbol, const int atr_len, double &atr_out, st
    return true;
   }
 
-// Build swing stop with Bot-style R / chase / ATR caps. Returns false → skip entry.
+// Build swing stop. When validate_r=false: geometry only (no chase/ATR/pct caps).
 bool SB_MakeSwingStop(const int side, const double entry,
                       const int swing_len, const double r_min_atr, const double r_max_atr,
                       const double r_max_pct, const double chase_frac,
-                      double &sl_out, double &r_out, string &err)
+                      double &sl_out, double &r_out, string &err,
+                      const bool validate_r=true)
   {
    sl_out = 0.0;
    r_out = 0.0;
@@ -129,11 +178,14 @@ bool SB_MakeSwingStop(const int side, const double entry,
    if(!SB_LastSwingR(_Symbol, swing_len, sh, slv, err))
       return false;
    double atr = 0.0;
-   string aerr;
-   if(!SB_ClosedBarAtr(_Symbol, 14, atr, aerr))
+   if(validate_r)
      {
-      err = aerr;
-      return false;
+      string aerr;
+      if(!SB_ClosedBarAtr(_Symbol, 14, atr, aerr))
+        {
+         err = aerr;
+         return false;
+        }
      }
    double rng = sh - slv;
    if(rng <= 0.0)
@@ -152,7 +204,7 @@ bool SB_MakeSwingStop(const int side, const double entry,
         }
       sl = slv;
       r = entry - slv;
-      if(chase_frac > 0.0 && (r / rng) > chase_frac)
+      if(validate_r && chase_frac > 0.0 && (r / rng) > chase_frac)
         {
          err = "swing: chase";
          return false;
@@ -167,7 +219,7 @@ bool SB_MakeSwingStop(const int side, const double entry,
         }
       sl = sh;
       r = sh - entry;
-      if(chase_frac > 0.0 && (r / rng) > chase_frac)
+      if(validate_r && chase_frac > 0.0 && (r / rng) > chase_frac)
         {
          err = "swing: chase";
          return false;
@@ -183,20 +235,23 @@ bool SB_MakeSwingStop(const int side, const double entry,
       err = "swing: R<=0";
       return false;
      }
-   if(atr > 0.0 && r < r_min_atr * atr)
+   if(validate_r)
      {
-      err = "swing: R too tight";
-      return false;
-     }
-   if(atr > 0.0 && r > r_max_atr * atr)
-     {
-      err = "swing: R too wide (ATR)";
-      return false;
-     }
-   if(r_max_pct > 0.0 && r > entry * r_max_pct)
-     {
-      err = "swing: R too wide (pct)";
-      return false;
+      if(atr > 0.0 && r < r_min_atr * atr)
+        {
+         err = "swing: R too tight";
+         return false;
+        }
+      if(atr > 0.0 && r > r_max_atr * atr)
+        {
+         err = "swing: R too wide (ATR)";
+         return false;
+        }
+      if(r_max_pct > 0.0 && r > entry * r_max_pct)
+        {
+         err = "swing: R too wide (pct)";
+         return false;
+        }
      }
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    sl_out = NormalizeDouble(sl, digits);

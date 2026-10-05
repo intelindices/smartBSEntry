@@ -10,7 +10,7 @@ Example::
 
   python -m smartbs_engines._ablate_all_blend_groups \\
     --symbols XAUUSD --backbone smartBSEntryV2 \\
-    --label-mode pivot_breakout --pivot-len 5 --barrier-horizon 24
+    --label-mode pivot_breakout --pivot-len 5
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def main() -> None:
     ap.add_argument("--backbone", default="smartBSEntryV2")
     ap.add_argument("--label-mode", default="pivot_breakout")
     ap.add_argument("--barrier-horizon", type=int, default=24)
-    ap.add_argument("--pivot-len", type=int, default=5)
+    ap.add_argument("--pivot-len", type=int, default=15)
     ap.add_argument("--train-years", type=float, default=10.0)
     ap.add_argument("--session-hours", default="normal")
     ap.add_argument("--ai-threshold", type=float, default=0.0)

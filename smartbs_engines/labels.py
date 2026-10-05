@@ -25,9 +25,9 @@ Also: ``label_session_trend`` — at each 1h bar in the pred window
 (``[session_start−1h, session_end−1h)``), first touch of
 ``±k*ATR(14)`` before session end (default k=2): LONG / SHORT / FLAT.
 
-Also: ``label_pivot_breakout`` — Pine-style last unbroken pivot high/low
-(lookback 9): first break of that range within ``horizon`` bars (default 24)
-→ LONG / SHORT / else FLAT.
+Also: ``label_pivot_breakout`` — rolling extremes over ``pivot_length``:
+update window high → LONG, update window low → SHORT; else first strict
+break of the frozen range within the next ``L`` bars, else FLAT.
 """
 
 from __future__ import annotations
@@ -38,8 +38,6 @@ import numpy as np
 
 from smartbs_engines.config import SmartBSConfig
 from smartbs_engines.structure import atr as _atr
-from smartbs_engines.structure import pivothigh as _pivothigh
-from smartbs_engines.structure import pivotlow as _pivotlow
 
 DEFAULT_BARRIER_K = 1.0
 DEFAULT_BARRIER_HORIZON = 24
@@ -48,8 +46,7 @@ DEFAULT_SESSION_TREND_K = 2.0  # ±2*ATR(14) vs session-end close
 DEFAULT_SESSION_TREND_HORIZON = 0  # unused (resolved mask handles tails)
 DEFAULT_SESSION_TREND_PCT = 0.0  # unused
 DEFAULT_DAY_TREND_PCT = 0.01  # ±1% vs today's NY session end close
-DEFAULT_PIVOT_BREAKOUT_LEN = 5  # pivot lookback (bars left/right)
-DEFAULT_PIVOT_BREAKOUT_HORIZON = 24  # 1 day of 1h candles
+DEFAULT_PIVOT_BREAKOUT_LEN = 15  # rolling window / forward scan length
 H4_MS = 14_400_000  # 4h bucket
 
 DAY_MS = 86_400_000
@@ -125,61 +122,34 @@ def label_next_direction(
     return labels
 
 
-def _last_unbroken_pivots(
-    high: np.ndarray,
-    low: np.ndarray,
-    *,
-    pivot_len: int = DEFAULT_PIVOT_BREAKOUT_LEN,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Causal last unbroken pivot high/low (Pine ta.pivothigh/low + break drops).
-
-    Matches smartBSRMSTIndicator / SmartBSRM: confirm with ``pivot_len`` bars
-    on each side; drop a stored high when ``high > piv``, drop a stored low
-    when ``low < piv``; then accept a newly confirmed pivot on that bar.
-    """
-    high = np.asarray(high, dtype=np.float64)
-    low = np.asarray(low, dtype=np.float64)
-    n = len(high)
-    ph_raw = _pivothigh(high, int(pivot_len), int(pivot_len))
-    pl_raw = _pivotlow(low, int(pivot_len), int(pivot_len))
-    last_ph = np.full(n, np.nan, dtype=np.float64)
-    last_pl = np.full(n, np.nan, dtype=np.float64)
-    cur_ph = np.nan
-    cur_pl = np.nan
-    for i in range(n):
-        if np.isfinite(cur_ph) and high[i] > cur_ph:
-            cur_ph = np.nan
-        if np.isfinite(cur_pl) and low[i] < cur_pl:
-            cur_pl = np.nan
-        if np.isfinite(ph_raw[i]):
-            cur_ph = float(ph_raw[i])
-        if np.isfinite(pl_raw[i]):
-            cur_pl = float(pl_raw[i])
-        last_ph[i] = cur_ph
-        last_pl[i] = cur_pl
-    return last_ph, last_pl
-
-
 def label_pivot_breakout(
     high: np.ndarray,
     low: np.ndarray,
     *,
     pivot_len: int = DEFAULT_PIVOT_BREAKOUT_LEN,
-    horizon: int = DEFAULT_PIVOT_BREAKOUT_HORIZON,
+    horizon: int | None = None,
 ) -> BarrierLabels:
-    """First break of the last unbroken pivot range within ``horizon`` bars.
+    """Rolling-extreme pivot breakout labels (window = forward scan = ``L``).
 
-    At each closed bar ``t``, freeze the last unbroken pivot high / low
-    (lookback ``pivot_len``, default 5). Looking forward at most
-    ``horizon`` bars (default 24 ≈ 1 day of 1h):
+    At closed bar ``t`` with ``L = pivot_len``:
 
-      LONG  if ``high`` breaks above last pivot high first
-      SHORT if ``low`` breaks below last pivot low first
-      FLAT  if neither side breaks (price stays in range), ambiguous same-bar
-            both-side touch, missing pivots, or the unresolved tail
+      win_hi = max(high[t-L+1 .. t])
+      win_lo = min(low[t-L+1 .. t])
+      Updates PH if ``high[t] == win_hi``; Updates PL if ``low[t] == win_lo``.
 
+    Rules:
+      1. Update PH only → LONG (immediate, resolved)
+      2. Update PL only → SHORT (immediate, resolved)
+      3. Update both → FLAT ambiguous (unresolved / dropped)
+      4. Else freeze ``(win_hi, win_lo)`` and scan forward up to ``L`` bars:
+         first ``high > win_hi`` → LONG; first ``low < win_lo`` → SHORT;
+         same-bar both → FLAT ambiguous; no break → FLAT range-hold (resolved)
+      5. Warmup ``t < L-1`` and tail ``t > n-1-L`` → unresolved
+
+    ``horizon`` is ignored; the forward scan length is always ``pivot_len``.
     CLASS ids 0/1/2 keep the 3-logit head compatible.
     """
+    del horizon  # forced to pivot_len
     high = np.asarray(high, dtype=np.float64)
     low = np.asarray(low, dtype=np.float64)
     if high.shape != low.shape:
@@ -191,45 +161,52 @@ def label_pivot_breakout(
     if n == 0:
         return BarrierLabels(labels=labels, resolved=resolved, ambiguous=ambiguous)
 
-    plen = max(int(pivot_len), 1)
-    hor = max(int(horizon), 1)
-    upper, lower = _last_unbroken_pivots(high, low, pivot_len=plen)
+    L = max(int(pivot_len), 1)
+    # Valid decision bars: full L-window behind and L bars of lookahead ahead.
+    for t in range(L - 1, n - L):
+        sl = slice(t - L + 1, t + 1)
+        win_hi = float(np.max(high[sl]))
+        win_lo = float(np.min(low[sl]))
+        upd_ph = high[t] == win_hi
+        upd_pl = low[t] == win_lo
 
-    sentinel = n + 1
-    first_up = np.full(n, sentinel, dtype=np.int64)
-    first_dn = np.full(n, sentinel, dtype=np.int64)
-    has_range = (
-        np.isfinite(upper)
-        & np.isfinite(lower)
-        & (upper > lower)
-    )
+        if upd_ph and upd_pl:
+            labels[t] = SmartBSConfig.CLASS_FLAT
+            ambiguous[t] = True
+            continue
+        if upd_ph:
+            labels[t] = SmartBSConfig.CLASS_LONG
+            resolved[t] = True
+            continue
+        if upd_pl:
+            labels[t] = SmartBSConfig.CLASS_SHORT
+            resolved[t] = True
+            continue
 
-    for j in range(1, hor + 1):
-        if j >= n:
-            break
-        fut_high = np.full(n, -np.inf)
-        fut_low = np.full(n, np.inf)
-        fut_high[: n - j] = high[j:]
-        fut_low[: n - j] = low[j:]
-        hit_up = has_range & (fut_high > upper) & (first_up == sentinel)
-        hit_dn = has_range & (fut_low < lower) & (first_dn == sentinel)
-        first_up = np.where(hit_up, j, first_up)
-        first_dn = np.where(hit_dn, j, first_dn)
-
-    labels = np.where(first_up < first_dn, SmartBSConfig.CLASS_LONG, labels)
-    labels = np.where(first_dn < first_up, SmartBSConfig.CLASS_SHORT, labels)
-
-    touched = np.minimum(first_up, first_dn)
-    ambiguous = (first_up == first_dn) & (first_up != sentinel) & has_range
-    # In-range no-break within horizon is a resolved FLAT (range hold).
-    held = has_range & (touched == sentinel)
-    resolved = ((touched != sentinel) & ~ambiguous) | held
-    labels = np.where(ambiguous, SmartBSConfig.CLASS_FLAT, labels)
-    labels = np.where(~has_range, SmartBSConfig.CLASS_FLAT, labels)
-    # Tail cannot finish the horizon look-ahead.
-    labels[max(n - hor, 0) :] = SmartBSConfig.CLASS_FLAT
-    resolved[max(n - hor, 0) :] = False
-    ambiguous[max(n - hor, 0) :] = False
+        # Between extremes: first strict break of the frozen window within L bars.
+        decided = False
+        for j in range(1, L + 1):
+            i = t + j
+            broke_hi = high[i] > win_hi
+            broke_lo = low[i] < win_lo
+            if broke_hi and broke_lo:
+                labels[t] = SmartBSConfig.CLASS_FLAT
+                ambiguous[t] = True
+                decided = True
+                break
+            if broke_hi:
+                labels[t] = SmartBSConfig.CLASS_LONG
+                resolved[t] = True
+                decided = True
+                break
+            if broke_lo:
+                labels[t] = SmartBSConfig.CLASS_SHORT
+                resolved[t] = True
+                decided = True
+                break
+        if not decided:
+            labels[t] = SmartBSConfig.CLASS_FLAT
+            resolved[t] = True
 
     return BarrierLabels(labels=labels, resolved=resolved, ambiguous=ambiguous)
 

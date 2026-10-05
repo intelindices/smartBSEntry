@@ -89,11 +89,11 @@ class SmartBSConfig:
     barrier_k: float = 1.0
     barrier_horizon: int = 4
     barrier_pct: float = 0.02  # pct_barrier ±fraction; session_direction defaults to 0.005
-    pivot_len: int = 5  # pivot_breakout lookback (bars L/R)
+    pivot_len: int = 15  # pivot_breakout rolling window + forward scan length
     # session_direction: session open→close vs ±0.5% (LONG/SHORT/FLAT)
     # session_trend: pred window [start−1h, end−1h); ±k*ATR first-touch (default k=2)
     # day_trend: each 1h → today's NY session end close vs ±pct (default ±1%)
-    # pivot_breakout: first break of last unbroken pivot H/L within barrier_horizon (24)
+    # pivot_breakout: rolling L extremes; immediate update LONG/SHORT or first break in L bars
     # Session UTC windows for labels + common channels: normal (default) | adjusted
     session_hours: str = "normal"
     ma_len: int = 14  # MA+AI replay gate SMA (not a label mode)

@@ -140,6 +140,16 @@ def load_aligned_15m(
     return _load_aligned_interval(df_1h, interval="15m", symbol=symbol, data_source=data_source)
 
 
+def load_aligned_5m(
+    df_1h: pd.DataFrame,
+    *,
+    symbol: str | None,
+    data_source: str | None,
+) -> pd.DataFrame | None:
+    """Load 5m OHLCV covering the primary window when cache/API allows."""
+    return _load_aligned_interval(df_1h, interval="5m", symbol=symbol, data_source=data_source)
+
+
 def load_aligned_1h(
     df_primary: pd.DataFrame,
     *,

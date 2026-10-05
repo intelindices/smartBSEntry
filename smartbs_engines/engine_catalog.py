@@ -67,7 +67,15 @@ class EngineSpec:
 # Core widths must match engine feature_names (before common pack).
 ENGINE_SPECS: tuple[EngineSpec, ...] = (
     EngineSpec("regime_engine", 12, "engine_regime.py", "SB_REGIME_CH", in_blend_live=True, in_blend_research=True),
-    EngineSpec("maribbon", 22, "maribbon_engine.py", "SB_MARIBBON_CH", in_blend_live=True, in_blend_research=True),
+    EngineSpec(
+        "maribbon",
+        39,
+        "maribbon_engine.py",
+        "SB_MARIBBON_CH",
+        in_blend_live=True,
+        in_blend_research=True,
+        notes="13 base ×1h/15m/5m; EMAs 9..240; no common attach",
+    ),
     EngineSpec("dbb", 12, "engine_dbb.py", "SB_DBB_CH", in_blend_live=True, in_blend_research=True, in_signal_sources=True),
     EngineSpec("trend_pullback", 15, "engine_trend_pullback.py", "SB_TP_CH", in_blend_live=True, in_blend_research=True, in_signal_sources=True),
     EngineSpec("smart_money", 20, "engine_smart_money.py", "SB_SM_CH", in_blend_live=True, in_blend_research=True, in_signal_sources=True),
@@ -79,10 +87,10 @@ ENGINE_SPECS: tuple[EngineSpec, ...] = (
     EngineSpec("common", 0, "engine_common.py", "SB_COMMON_ONLY", notes="common pack only (16 ch); no core"),
     EngineSpec(
         "all_blend",
-        134,
+        99,
         "engine_all_blend.py",
         "SB_ALL_BLEND_CH",
-        notes="union of unique cores + common 16 = 150 (maribbon EMA420/500 dropped)",
+        notes="union cores + common 16 = 115; maribbon=13ch 1h; no dbb 15m twins; alias keep slopes/dist_fast_mid/rsi_maj_in_band/mr_stretch",
     ),
 )
 
@@ -123,6 +131,9 @@ def total_channels(name: str, *, with_common: bool = True) -> int:
     # ``common`` engine *is* the common pack (no second attach).
     if key == "common":
         return COMMON_CHANNELS if with_common else 0
+    # Core-only engines (no common pack appended).
+    if key in ("pivot_engine", "maribbon"):
+        return n
     return n + (COMMON_CHANNELS if with_common else 0)
 
 

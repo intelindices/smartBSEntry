@@ -1,6 +1,7 @@
 //+------------------------------------------------------------------+
 //| SmartBS — dispatch lookback windows for all ST engines           |
-//| Every engine window ends with the shared common channel pack.    |
+//| Most engines append the shared common pack; all_blend embeds it, |
+//| and pivot_engine / maribbon are core-only.                       |
 //+------------------------------------------------------------------+
 #ifndef SMARTBS_FEATURE_DISPATCH_MQH
 #define SMARTBS_FEATURE_DISPATCH_MQH
@@ -16,6 +17,7 @@
 #include "PivotFeatures.mqh"
 #include "SignalsFeatures.mqh"
 #include "CommonChannels.mqh"
+#include "AllBlendFeatures.mqh"
 #include "EngineCatalog.mqh"
 
 #define SB_MAX_ENGINE_CH SB_MAX_TOTAL_CH
@@ -54,6 +56,8 @@ int SB_EngineCoreChannelCount(const string eng)
       return SB_PIVOT_CH;
    if(e == "signals")
       return SB_SIGNALS_CH;
+   if(e == "all_blend")
+      return SB_ALL_BLEND_CH; // 151 core (common embedded separately)
    return -1;
   }
 
@@ -64,6 +68,10 @@ int SB_EngineChannelCount(const string eng)
       return SB_COMMON_CH; // common-only: 16 channels (not core+common)
    if(e == "pivot_engine")
       return SB_PIVOT_CH; // core-only: no common pack
+   if(e == "maribbon")
+      return SB_MARIBBON_CH; // core-only: no common pack
+   if(e == "all_blend")
+      return SB_ALL_BLEND_TOTAL_CH; // 167 = 151 core + 16 common (embedded)
    int core = SB_EngineCoreChannelCount(eng);
    if(core < 0)
       return 0;
@@ -76,6 +84,8 @@ int SB_EngineWarmup(const string eng)
    int w = 0;
    if(e == "common")
       return SB_COMMON_WARMUP;
+   if(e == "all_blend")
+      return SB_ALL_BLEND_WARMUP; // max(sources, common); currently 720
    if(e == "dbb")
       w = SB_DBB_WARMUP;
    else if(e == "macd")
@@ -98,7 +108,7 @@ int SB_EngineWarmup(const string eng)
       w = SB_SIGNALS_WARMUP;
    else
       return 0;
-   if(e == "pivot_engine")
+   if(e == "pivot_engine" || e == "maribbon")
       return w; // core-only: no common warmup floor
    return MathMax(w, SB_COMMON_WARMUP);
   }
@@ -144,6 +154,16 @@ bool SB_BuildEngineLookbackWindow(const string eng, const string symbol,
    // common-only: 16 channels, no extra append.
    if(e == "common")
       return SB_BuildCommonLookbackWindow(symbol, lookback, window, err);
+
+   // all_blend embeds common itself — do not SB_ExtendWindowWithCommon after.
+   if(e == "all_blend")
+     {
+      if(!SB_BuildAllBlendLookbackWindow(symbol, lookback,
+                                         end_bar_closed_h1_index_or_use_shift,
+                                         window, err))
+         return false;
+      return true;
+     }
 
    int n_bars = 0;
    int end_bar = end_bar_closed_h1_index_or_use_shift;
@@ -247,8 +267,8 @@ bool SB_BuildEngineLookbackWindow(const string eng, const string symbol,
 
    if(!ok)
       return false;
-   // pivot_engine is core-only (no common pack).
-   if(e == "pivot_engine")
+   // pivot_engine / maribbon are core-only (no common pack).
+   if(e == "pivot_engine" || e == "maribbon")
       return true;
    return SB_ExtendWindowWithCommon(symbol, lookback, end_bar, core_ch, window, err);
   }

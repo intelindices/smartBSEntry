@@ -231,7 +231,7 @@ def train_model(cfg: SmartBSConfig) -> str:
         "barrier_k": float(getattr(cfg, "barrier_k", 1.0) or 1.0),
         "barrier_horizon": int(getattr(cfg, "barrier_horizon", 4) or 4),
         "barrier_pct": float(getattr(cfg, "barrier_pct", 0.02) or 0.02),
-        "pivot_len": int(getattr(cfg, "pivot_len", 5) or 5),
+        "pivot_len": int(getattr(cfg, "pivot_len", 15) or 15),
         "ablation_zero_group": str(getattr(cfg, "ablation_zero_group", "") or ""),
         "num_inputs": cfg.num_inputs,
         "num_inputs_15m": int(getattr(cfg, "num_inputs_15m", 0) or 0),
@@ -362,14 +362,14 @@ def parse_args() -> SmartBSConfig:
         "--barrier-horizon",
         type=int,
         default=4,
-        help="triple_barrier / pct_barrier / pivot_breakout horizon "
-        "(pivot_breakout default 24 when left at 4)",
+        help="triple_barrier / pct_barrier horizon bars "
+        "(ignored for pivot_breakout; that mode uses --pivot-len)",
     )
     parser.add_argument(
         "--pivot-len",
         type=int,
-        default=5,
-        help="pivot_breakout lookback L/R (default 5)",
+        default=15,
+        help="pivot_breakout rolling window + forward scan length L (default 15)",
     )
     parser.add_argument(
         "--session-hours",

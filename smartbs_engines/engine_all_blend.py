@@ -23,6 +23,7 @@ from smartbs_engines.common_channels import (
 from smartbs_engines.registry import BaseSTEngine, EngineResult, get_engine
 
 # Feature engines to union (excludes common, signals, all_blend).
+# ``maribbon`` slot uses 1h base 13 channels only (no 15m/5m twins).
 ALL_BLEND_SOURCES: tuple[str, ...] = (
     "regime_engine",
     "maribbon",
@@ -34,32 +35,21 @@ ALL_BLEND_SOURCES: tuple[str, ...] = (
     "rsi_divergence",
 )
 
-# Ablation-driven drops — empty (core 134 + common 16 = 150).
-ALL_BLEND_DROP_CHANNELS: frozenset[str] = frozenset()
-
-# Near-duplicate cliques (|r|≥0.95 on XAU 5y). Used for LOGO clique ablation
-# via ``ablation_zero_group=alias_N`` (dim kept; columns zeroed at train+infer).
-ALL_BLEND_ALIAS_CLIQUES: dict[str, tuple[str, ...]] = {
-    "alias_1": (
+# Permanently dropped near-dupe cliques (|r|≥0.95):
+# - alias_1: keep slope_fast/mid/slow; drop rest of trend/RSI stack family
+# - alias_2: keep dist_fast_mid; drop the other 4
+# - alias_3: keep rsi_maj_in_band (rsi_to_band never present)
+# - alias_4: keep mr_stretch; drop range_pos
+# - alias_6: common ohlcv_open + ohlcv_close_displacement kept (maribbon open_t also present)
+# - dbb: drop 15m twins (keep 1h zone pack only)
+ALL_BLEND_DROP_CHANNELS: frozenset[str] = frozenset(
+    {
+        # alias_1 (kept: slope_fast, slope_mid, slope_slow)
         "dist_close_mid",
         "dist_fast",
-        "slope_fast",
-        "slope_mid",
-        "dist_ema9",
-        "dist_ema24",
-        "slope_ema9",
-        "slope_ema14",
-        "slope_ema24",
-        "slope_ema40",
-        "slope_ema60",
-        "slope_ema100",
-        "slope_ema160",
-        "slope_ema240",
-        "slope_ema320",
         "rsi_norm",
         "rsi_vs_mid",
         "dist_mid",
-        "slope_slow",
         "stack_12_26",
         "dist_fast_12",
         "dist_slow_26",
@@ -72,20 +62,45 @@ ALL_BLEND_ALIAS_CLIQUES: dict[str, tuple[str, ...]] = {
         "dist_maj_from_30",
         "dist_maj_from_70",
         "rsi_min_norm",
-    ),
-    "alias_2": (
-        "dist_fast_mid",
-        "dist_ema40",
+        # alias_2 (kept: dist_fast_mid)
         "stack_fast_mid",
         "trend_stack_atr",
         "bull_trend_soft",
         "bear_trend_soft",
-    ),
-    "alias_3": ("rsi_to_band", "rsi_maj_in_band"),
-    "alias_4": ("range_pos", "mr_stretch"),
+        # alias_4 (kept: mr_stretch)
+        "range_pos",
+        # dbb 15m twins
+        "body_peak_zone_15m",
+        "close_in_upper_outer_15m",
+        "close_in_upper_outer_to_inner_15m",
+        "close_in_mid_zone_15m",
+        "close_in_lower_inner_to_outer_15m",
+        "close_in_lower_outer_15m",
+    }
+)
+
+# Near-duplicate cliques still available for LOGO via ablation_zero_group=alias_N.
+ALL_BLEND_ALIAS_CLIQUES: dict[str, tuple[str, ...]] = {
+    "alias_1": ("slope_fast", "slope_mid", "slope_slow"),
+    "alias_2": ("dist_fast_mid",),
+    "alias_3": ("rsi_maj_in_band",),
+    "alias_4": ("mr_stretch",),
     "alias_5": ("sim_xdn_70_decay", "rev_short_decay"),
     "alias_6": ("ohlcv_open", "ohlcv_close_displacement"),
 }
+
+
+def _source_feature_names(src: str) -> tuple[list[str], int]:
+    """Names + warmup for an all_blend source (maribbon → 1h base 13 only)."""
+    if src == "maribbon":
+        from smartbs_engines.maribbon_engine import (
+            BASE_FEATURE_NAMES,
+            MARIBBON_WARMUP_BARS,
+        )
+
+        return list(BASE_FEATURE_NAMES), int(MARIBBON_WARMUP_BARS)
+    eng = get_engine(src, attach_common=False)
+    return list(eng.feature_names), int(eng.warmup_bars)
 
 
 def _plan_channels() -> tuple[list[str], list[tuple[str, int]], int]:
@@ -96,9 +111,9 @@ def _plan_channels() -> tuple[list[str], list[tuple[str, int]], int]:
     warmup = 0
     drop = ALL_BLEND_DROP_CHANNELS
     for src in ALL_BLEND_SOURCES:
-        eng = get_engine(src, attach_common=False)
-        warmup = max(warmup, int(eng.warmup_bars))
-        for j, name in enumerate(eng.feature_names):
+        feat_names, warm = _source_feature_names(src)
+        warmup = max(warmup, warm)
+        for j, name in enumerate(feat_names):
             key = str(name)
             if key in seen or key in drop:
                 continue
@@ -290,15 +305,36 @@ class AllBlendSTEngine(BaseSTEngine):
         by_src: dict[str, np.ndarray] = {}
         valid = 0
         for src in ALL_BLEND_SOURCES:
-            eng = get_engine(src, attach_common=False)
-            res = _call_compute(eng, df, **kwargs)
-            feats = np.asarray(res.features, dtype=np.float32)
+            if src == "maribbon":
+                from smartbs_engines.maribbon_engine import (
+                    BASE_N,
+                    MARIBBON_WARMUP_BARS,
+                    pack_maribbon_base,
+                )
+
+                o = df["open"].to_numpy(dtype=np.float64)
+                h = df["high"].to_numpy(dtype=np.float64)
+                l = df["low"].to_numpy(dtype=np.float64)
+                c = df["close"].to_numpy(dtype=np.float64)
+                cols = pack_maribbon_base(o, h, l, c)
+                feats = np.column_stack(cols).astype(np.float32)
+                if feats.shape != (n, BASE_N):
+                    raise ValueError(
+                        f"all_blend: maribbon 1h base {feats.shape} != ({n}, {BASE_N})"
+                    )
+                feats = np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
+                src_valid = min(n, int(MARIBBON_WARMUP_BARS))
+            else:
+                eng = get_engine(src, attach_common=False)
+                res = _call_compute(eng, df, **kwargs)
+                feats = np.asarray(res.features, dtype=np.float32)
+                src_valid = int(res.valid_from)
             if feats.ndim != 2 or feats.shape[0] != n:
                 raise ValueError(
                     f"all_blend: {src} features {feats.shape} incompatible with n={n}"
                 )
             by_src[src] = feats
-            valid = max(valid, int(res.valid_from))
+            valid = max(valid, src_valid)
 
         cols: list[np.ndarray] = []
         for src, j in self._plan:

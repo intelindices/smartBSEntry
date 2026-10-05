@@ -6,13 +6,13 @@
 #define SMARTBS_ENGINE_CATALOG_MQH
 
 #define SB_COMMON_CH_CATALOG 16
-#define SB_MAX_TOTAL_CH      150
+#define SB_MAX_TOTAL_CH      115
 
 #ifndef SB_REGIME_CH
 #define SB_REGIME_CH 12  // regime_engine
 #endif
 #ifndef SB_MARIBBON_CH
-#define SB_MARIBBON_CH 22  // maribbon
+#define SB_MARIBBON_CH 39  // maribbon
 #endif
 #ifndef SB_DBB_CH
 #define SB_DBB_CH 12  // dbb
@@ -39,7 +39,7 @@
 #define SB_COMMON_ONLY 0  // common
 #endif
 #ifndef SB_ALL_BLEND_CH
-#define SB_ALL_BLEND_CH 134  // all_blend
+#define SB_ALL_BLEND_CH 99  // all_blend
 #endif
 
 // Live blend pool (Python BLEND_LIVE / ACTIVE_BLEND_ENGINES)

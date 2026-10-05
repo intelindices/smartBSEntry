@@ -55,7 +55,14 @@ def build_feature_matrix(
         if name == "signals"
         else get_engine(name)
     )
-    if name in ("smart_money", "rsi_divergence", "dbb", "signals", "all_blend"):
+    if name in (
+        "smart_money",
+        "rsi_divergence",
+        "dbb",
+        "signals",
+        "all_blend",
+        "maribbon",
+    ):
         feats = eng.compute(df, symbol=symbol, data_source=data_source).features
     else:
         feats = eng.compute(df).features
@@ -227,20 +234,15 @@ def _day_trend_pct(cfg: SmartBSConfig) -> float:
 
 
 def _pivot_breakout_params(cfg: SmartBSConfig) -> tuple[int, int]:
-    """pivot_breakout: pivot_len (default 5), horizon bars (default 24)."""
-    from smartbs_engines.labels import (
-        DEFAULT_PIVOT_BREAKOUT_HORIZON,
-        DEFAULT_PIVOT_BREAKOUT_LEN,
-    )
+    """pivot_breakout: rolling window L = pivot_len; horizon forced to L.
+
+    ``barrier_horizon`` is ignored for this mode.
+    """
+    from smartbs_engines.labels import DEFAULT_PIVOT_BREAKOUT_LEN
 
     plen = int(getattr(cfg, "pivot_len", DEFAULT_PIVOT_BREAKOUT_LEN) or DEFAULT_PIVOT_BREAKOUT_LEN)
-    raw_h = int(
-        getattr(cfg, "barrier_horizon", DEFAULT_PIVOT_BREAKOUT_HORIZON)
-        or DEFAULT_PIVOT_BREAKOUT_HORIZON
-    )
-    # Config default barrier_horizon=4 → mode contract 24 (1 day of 1h).
-    hor = DEFAULT_PIVOT_BREAKOUT_HORIZON if raw_h == 4 else raw_h
-    return max(plen, 1), max(hor, 1)
+    plen = max(plen, 1)
+    return plen, plen
 
 
 def _session_trend_resolved(df: pd.DataFrame, cfg: SmartBSConfig) -> np.ndarray:
