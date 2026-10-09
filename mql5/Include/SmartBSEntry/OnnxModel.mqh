@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| SmartBS — ONNX TCN loader / runner (max 48 channels × lookback)  |
+//| SmartBS — ONNX TCN loader / runner (max 128 channels × lookback)  |
 //| OnnxRun requires the buffer byte-size to match the input shape.  |
 //| We dispatch exact [1][C][64] tensors per channel count.           |
 //+------------------------------------------------------------------+
@@ -8,7 +8,7 @@
 
 #include "Softmax.mqh"
 
-#define SB_ONNX_MAX_INPUTS 48
+#define SB_ONNX_MAX_INPUTS 128
 #define SB_ONNX_MAX_LOOKBACK 64
 
 class CSBOnnxModel
@@ -49,6 +49,8 @@ private:
    float    m_in44[1][44][SB_ONNX_MAX_LOOKBACK];
    float    m_in45[1][45][SB_ONNX_MAX_LOOKBACK];
    float    m_in48[1][48][SB_ONNX_MAX_LOOKBACK];
+   float    m_in115[1][115][SB_ONNX_MAX_LOOKBACK];
+   float    m_in128[1][128][SB_ONNX_MAX_LOOKBACK];
 
    bool FillAndRun(const float &window[])
      {
@@ -272,6 +274,22 @@ private:
                m_in48[0][c][t] = window[c * T + t];
          return OnnxRun(m_handle, ONNX_NO_CONVERSION, m_in48, m_out);
         }
+      if(C == 115)
+        {
+         ArrayInitialize(m_in115, 0.0f);
+         for(int c = 0; c < 115; c++)
+            for(int t = 0; t < T; t++)
+               m_in115[0][c][t] = window[c * T + t];
+         return OnnxRun(m_handle, ONNX_NO_CONVERSION, m_in115, m_out);
+        }
+      if(C == 128)
+        {
+         ArrayInitialize(m_in128, 0.0f);
+         for(int c = 0; c < 128; c++)
+            for(int t = 0; t < T; t++)
+               m_in128[0][c][t] = window[c * T + t];
+         return OnnxRun(m_handle, ONNX_NO_CONVERSION, m_in128, m_out);
+        }
 
       Print("Unsupported num_inputs for ONNX buffer: ", C);
       return false;
@@ -304,6 +322,8 @@ public:
       ArrayInitialize(m_in44, 0.0f);
       ArrayInitialize(m_in45, 0.0f);
       ArrayInitialize(m_in48, 0.0f);
+      ArrayInitialize(m_in115, 0.0f);
+      ArrayInitialize(m_in128, 0.0f);
      }
 
    ~CSBOnnxModel(void) { Shutdown(); }

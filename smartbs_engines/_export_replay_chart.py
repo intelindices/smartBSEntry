@@ -2,7 +2,7 @@
 
 Usage:
   python -m smartbs_engines._export_replay_chart \\
-    --ckpt-root checkpoints_pivot_breakout_roll_p5_xau_xag_entryv2 \\
+    --ckpt-root checkpoints_rolle_breakout_roll_p5_xau_xag_entryv2 \\
     --symbols XAUUSD,XAGUSD --windows 90,180,360
 
   python -m smartbs_engines._export_replay_chart --serve
@@ -36,7 +36,7 @@ MA_FAST = 14   # EMA
 MA_MID = 48    # EMA
 MA_SLOW = 120  # EMA
 MA_LONG = 180  # SMA
-ARM_SMA_LEN = 14  # exit_arm confirmation SMA (replay --ma-len default)
+ARM_SMA_LEN = 14  # unused alias; exit_arm chart/EA uses EMA14
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = Path(__file__).resolve().parent / "replay_chart"
@@ -122,6 +122,40 @@ def _raw_ai_positions(
     return pos
 
 
+def _peek_ckpt_interval(checkpoint: Path) -> str:
+    """Read interval from checkpoint config (default 1h)."""
+    import torch
+
+    ck = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
+    cfg = ck.get("config") or {}
+    if isinstance(cfg, dict):
+        from smartbs_engines.labels import normalize_ckpt_config
+
+        normalize_ckpt_config(cfg)
+    iv = str(cfg.get("interval") or "1h").strip().lower()
+    if iv in ("60m", "60", "h1"):
+        return "1h"
+    if iv in ("5min", "m5"):
+        return "5m"
+    if iv in ("15min", "m15"):
+        return "15m"
+    if iv in ("240m", "h4"):
+        return "4h"
+    return iv or "1h"
+
+
+def _warm_bars_for_interval(interval: str) -> int:
+    """Warmup bars ahead of the holdout window (features need history)."""
+    iv = (interval or "1h").strip().lower()
+    if iv == "5m":
+        return 12_000
+    if iv == "15m":
+        return 8_000
+    if iv == "4h":
+        return 1_500
+    return 3_000
+
+
 def export_checkpoint_windows(
     symbol: str,
     checkpoint: Path,
@@ -131,16 +165,19 @@ def export_checkpoint_windows(
     ai_threshold: float = 0.0,
 ) -> list[dict]:
     """Predict once, then write one JSON series per window."""
-    df = fetch_klines(symbol, "1h", max_candles=0, source="mt5")
+    interval = _peek_ckpt_interval(checkpoint)
+    df = fetch_klines(symbol, interval, max_candles=0, source="mt5")
     end_ms = int(df["open_time"].iloc[-1])
     max_days = max(windows_days)
     cutoff_max = end_ms - int(max_days) * 86_400_000
     hold = df[df["open_time"] >= cutoff_max].reset_index(drop=True)
-    warm = df[df["open_time"] < cutoff_max].tail(3_000)
+    warm = df[df["open_time"] < cutoff_max].tail(_warm_bars_for_interval(interval))
     full = pd.concat([warm, hold], ignore_index=True)
     hold_start = len(warm)
 
     probs, cfg = predict_probs(full, str(checkpoint), symbol=symbol, data_source="mt5")
+    # Prefer config stamped at train time; fall back to peeked interval.
+    interval = str(cfg.get("interval") or interval or "1h").strip().lower()
     lookback = int(cfg.get("lookback", 64))
     cls = _classes_from_probs(probs, ai_threshold, force_side=False)
     opens = full["open"].to_numpy(dtype=np.float64)
@@ -153,12 +190,12 @@ def export_checkpoint_windows(
 
     lot = float(LOTS.get(symbol, 0.1))
     pv = float(PVS.get(symbol, 1.0))
-    sma_arm = _sma(closes, ARM_SMA_LEN)
+    ema_arm = _ema(closes, ARM_SMA_LEN)
     pos_raw = _raw_ai_positions(cls, start=start, n=n)
     pos_exit = _positions_raw_arm(
         cls,
         closes,
-        sma_arm,
+        ema_arm,
         start=start,
         n=n,
         entry_arm=False,
@@ -181,7 +218,7 @@ def export_checkpoint_windows(
         "mid": _ema(closes, MA_MID),
         "slow": _ema(closes, MA_SLOW),
         "long": _sma(closes, MA_LONG),
-        "arm": sma_arm,  # SMA14 used by exit_arm
+        "arm": ema_arm,  # EMA14 used by exit_arm
     }
     rows: list[dict] = []
     out_dir.joinpath("data").mkdir(parents=True, exist_ok=True)
@@ -259,13 +296,17 @@ def export_checkpoint_windows(
 
         wins = [t for t in trades_exit if t["pnl"] > 0]
         pnl = float(sum(t["pnl"] for t in trades_exit))
+        from smartbs_engines.labels import normalize_label_mode, rolle_len_of
+
         eng = str(cfg.get("feature_engine", "?"))
+        label_mode = normalize_label_mode(cfg.get("label_mode", "?"))
         meta = {
             "symbol": symbol,
             "engine": eng,
             "backbone": str(cfg.get("backbone", "?")),
-            "label_mode": str(cfg.get("label_mode", "?")),
-            "pivot_len": cfg.get("pivot_len"),
+            "label_mode": label_mode,
+            "interval": interval,
+            "rolle_len": rolle_len_of(cfg) if label_mode == "rolle_breakout" else cfg.get("rolle_len"),
             "days": int(days),
             "from": candles[0]["time"] if candles else None,
             "to": candles[-1]["time"] if candles else None,
@@ -273,6 +314,7 @@ def export_checkpoint_windows(
             "ai_threshold": float(ai_threshold),
             "lot": lot,
             "point_value": pv,
+            "balance": 10000.0,
             "arm_sma": ARM_SMA_LEN,
             "trades": len(trades_exit),
             "pnl": pnl,
@@ -287,8 +329,17 @@ def export_checkpoint_windows(
                 "arm": {"len": ARM_SMA_LEN, "type": "SMA"},
             },
         }
-        label_tag = str(cfg.get("label_mode") or "label").strip().lower().replace("/", "_")
-        stem = f"{symbol}_{eng}_{label_tag}_{days}d"
+        label_tag = str(label_mode or "label").strip().lower().replace("/", "_")
+        plen = meta.get("rolle_len")
+        if label_tag == "rolle_breakout" and plen is not None:
+            try:
+                label_tag = f"rolle_breakout_p{int(plen)}"
+            except (TypeError, ValueError):
+                pass
+        from smartbs_engines.model import backbone_stem_tag
+
+        bb_tag = backbone_stem_tag(meta.get("backbone"))
+        stem = f"{symbol}_{eng}_{label_tag}_{bb_tag}_{interval}_{days}d"
         out_path = out_dir / "data" / f"{stem}.json"
         out_path.write_text(
             json.dumps(
@@ -314,6 +365,8 @@ def export_checkpoint_windows(
                 "engine": eng,
                 "days": int(days),
                 "label_mode": meta["label_mode"],
+                "rolle_len": meta.get("rolle_len"),
+                "interval": interval,
                 "backbone": meta["backbone"],
                 "pnl": pnl,
                 "trades": len(trades_exit),
@@ -339,6 +392,35 @@ def _discover_ckpts(ckpt_root: Path, symbols: list[str]) -> list[tuple[str, str,
     return found
 
 
+def _rolle_len_from_stem(stem: str):
+    """Parse ``_p12_`` / ``_p15_`` style tag from export stem, else None."""
+    import re
+
+    m = re.search(r"_p(\d+)_(?:5m|15m|1h|4h)_\d+d$", stem)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"_rolle_breakout_p(\d+)_", stem)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def _load_meta_fast(path: Path) -> dict:
+    """Read only the leading ``meta`` object from a replay JSON (avoid full parse)."""
+    with path.open("r", encoding="utf-8") as f:
+        head = f.read(200_000)
+    for marker in (',"candles"', ',"signals"', ',"ma"', ',"trades"'):
+        i = head.find(marker)
+        if i > 0:
+            frag = head[:i] + "}"
+            try:
+                return dict(json.loads(frag).get("meta") or {})
+            except json.JSONDecodeError:
+                break
+    # Fallback: full load (small files / unusual layout).
+    return dict((json.loads(path.read_text(encoding="utf-8")).get("meta")) or {})
+
+
 def _rebuild_catalog_from_data(out_dir: Path) -> list[dict]:
     """Scan data/*.json and build catalog items (keeps all label modes)."""
     items: list[dict] = []
@@ -347,10 +429,19 @@ def _rebuild_catalog_from_data(out_dir: Path) -> list[dict]:
         return items
     for p in sorted(data_dir.glob("*.json")):
         try:
-            d = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            m = _load_meta_fast(p)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
             continue
-        m = d.get("meta") or {}
+        iv = str(m.get("interval") or "").strip().lower() or _interval_from_stem(p.stem)
+        from smartbs_engines.labels import normalize_label_mode
+
+        plen = m.get("rolle_len", m.get("pivot_len"))
+        if plen is None:
+            plen = _rolle_len_from_stem(p.stem)
+        try:
+            plen = int(plen) if plen is not None else None
+        except (TypeError, ValueError):
+            plen = None
         items.append(
             {
                 "id": p.stem,
@@ -358,7 +449,9 @@ def _rebuild_catalog_from_data(out_dir: Path) -> list[dict]:
                 "symbol": m.get("symbol") or p.stem.split("_")[0],
                 "engine": m.get("engine") or "?",
                 "days": int(m.get("days") or 0),
-                "label_mode": m.get("label_mode") or "unknown",
+                "label_mode": normalize_label_mode(m.get("label_mode") or "unknown"),
+                "rolle_len": plen,
+                "interval": iv,
                 "backbone": m.get("backbone"),
                 "pnl": m.get("pnl"),
                 "trades": m.get("trades"),
@@ -366,6 +459,14 @@ def _rebuild_catalog_from_data(out_dir: Path) -> list[dict]:
             }
         )
     return items
+
+
+def _interval_from_stem(stem: str) -> str:
+    """Parse interval tag from stem (..._{5m|15m|1h|4h}_{days}d); default 1h."""
+    parts = stem.rsplit("_", 2)
+    if len(parts) >= 2 and parts[-2] in ("5m", "15m", "1h", "4h"):
+        return parts[-2]
+    return "1h"
 
 
 def write_viewer(out_dir: Path) -> Path:
@@ -381,7 +482,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--ckpt-root",
-        default=str(ROOT / "checkpoints_pivot_breakout_roll_p15_xau_xag_xti_entryv2"),
+        default=str(ROOT / "checkpoints_rolle_breakout_roll_p15_xau_xag_xti_entryv2"),
     )
     ap.add_argument("--symbols", default="XAUUSD,XAGUSD")
     ap.add_argument("--windows", default="90,180,360")

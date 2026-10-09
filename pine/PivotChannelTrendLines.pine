@@ -115,7 +115,8 @@ if showDirLabels
         if barsPassedUpper <= tendLineExtension and barsPassedUpper >= 0
             float expectedUpperPrice = upperStartY + upperSlope * barsPassedUpper
             
-            if close > expectedUpperPrice and barstate.isconfirmed
+            // Full candle clear above line/extension (not wick/body touch).
+            if barstate.isconfirmed and low > expectedUpperPrice
                 label.delete(labelDirect)
                 labelDirect := label.new(bar_index, low, "Up", style = label.style_label_up, color = phColor, textcolor = color.white, size = size.small)
                 upperActive := false
@@ -129,7 +130,8 @@ if showDirLabels
         if barsPassedLower <= tendLineExtension and barsPassedLower >= 0
             float expectedLowerPrice = lowerStartY + lowerSlope * barsPassedLower
             
-            if close < expectedLowerPrice and barstate.isconfirmed
+            // Full candle clear below line/extension (not wick/body touch).
+            if barstate.isconfirmed and high < expectedLowerPrice
                 label.delete(labelDirect)
                 labelDirect := label.new(bar_index, high, "Down", style = label.style_label_down, color = plColor, textcolor = color.white, size = size.small)
                 lowerActive := false

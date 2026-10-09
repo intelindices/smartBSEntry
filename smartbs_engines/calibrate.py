@@ -26,9 +26,29 @@ def _is_1h_interval(interval: str | None) -> bool:
     return tag in ("1h", "60m", "60", "h1")
 
 
+def _is_5m_interval(interval: str | None) -> bool:
+    tag = str(interval or "").strip().lower()
+    return tag in ("5m", "5min", "m5")
+
+
 def _is_15m_interval(interval: str | None) -> bool:
     tag = str(interval or "").strip().lower()
     return tag in ("15m", "15min", "m15")
+
+
+def _is_4h_interval(interval: str | None) -> bool:
+    tag = str(interval or "").strip().lower()
+    return tag in ("4h", "240m", "h4")
+
+
+def _is_train_window_interval(interval: str | None) -> bool:
+    """Intervals that use train_years / from_date / 1h∩15m align."""
+    return (
+        _is_1h_interval(interval)
+        or _is_15m_interval(interval)
+        or _is_4h_interval(interval)
+        or _is_5m_interval(interval)
+    )
 
 
 def trim_train_years(df_1h: pd.DataFrame, years: float) -> pd.DataFrame:
@@ -154,17 +174,23 @@ def fetch_training_frame(symbol: str, cfg: SmartBSConfig) -> pd.DataFrame:
     interval = getattr(cfg, "interval", None) or "1h"
     years = float(getattr(cfg, "train_years", 0.0) or 0.0)
     max_bars = cfg.train_candles
-    use_years_window = (_is_1h_interval(interval) or _is_15m_interval(interval)) and years > 0.0
+    use_years_window = _is_train_window_interval(interval) and years > 0.0
     if use_years_window:
         max_bars = 0
     sym = spec.get("symbol", symbol)
-    if _is_15m_interval(interval):
+    if _is_15m_interval(interval) or _is_4h_interval(interval) or _is_5m_interval(interval):
         from smartbs_engines.data import fetch_klines
 
-        print(f"Fetching 15m series ({max_bars} bars) from {source}...")
+        if _is_5m_interval(interval):
+            iv = "5m"
+        elif _is_15m_interval(interval):
+            iv = "15m"
+        else:
+            iv = "4h"
+        print(f"Fetching {iv} series ({max_bars} bars) from {source}...")
         df = fetch_klines(
             symbol=sym,
-            interval="15m",
+            interval=iv,
             max_candles=max_bars,
             source=source,
             exchange=spec.get("exchange", "OANDA"),
@@ -181,9 +207,9 @@ def fetch_training_frame(symbol: str, cfg: SmartBSConfig) -> pd.DataFrame:
     if use_years_window:
         df = trim_train_years(df, years)
     from_date = str(getattr(cfg, "train_from_date", "") or "").strip()
-    if (_is_1h_interval(interval) or _is_15m_interval(interval)) and from_date:
+    if _is_train_window_interval(interval) and from_date:
         df = trim_from_date(df, from_date)
-    if (_is_1h_interval(interval) or _is_15m_interval(interval)) and bool(
+    if _is_train_window_interval(interval) and bool(
         getattr(cfg, "train_align_15m", True)
     ):
         df = trim_to_15m_start(df, str(sym), data_source=str(source))

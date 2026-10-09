@@ -85,15 +85,14 @@ class SmartBSConfig:
     num_inputs_15m: int = 0  # 0 → same as num_inputs (DualTF)
     horizon: int = 4
     return_threshold: float = 0.0015
-    label_mode: str = "triple_barrier"
+    label_mode: str = "rolle_breakout"
     barrier_k: float = 1.0
     barrier_horizon: int = 4
-    barrier_pct: float = 0.02  # pct_barrier ±fraction; session_direction defaults to 0.005
-    pivot_len: int = 15  # pivot_breakout rolling window + forward scan length
-    # session_direction: session open→close vs ±0.5% (LONG/SHORT/FLAT)
+    barrier_pct: float = 0.02  # day_trend ±fraction override (mode default 0.01)
+    rolle_len: int = 5  # rolle_breakout rolling window + forward look for updates
     # session_trend: pred window [start−1h, end−1h); ±k*ATR first-touch (default k=2)
     # day_trend: each 1h → today's NY session end close vs ±pct (default ±1%)
-    # pivot_breakout: rolling L extremes; immediate update LONG/SHORT or first break in L bars
+    # rolle_breakout: in next L bars, REH-only→LONG, REL-only→SHORT, neither/both→FLAT
     # Session UTC windows for labels + common channels: normal (default) | adjusted
     session_hours: str = "normal"
     ma_len: int = 14  # MA+AI replay gate SMA (not a label mode)
@@ -111,7 +110,7 @@ class SmartBSConfig:
     signal_point_gate: bool = False  # legacy alias → signal_gate when True
     signal_point_thr: float = 0.35
     signal_point_require_agree: bool = True
-    backbone: str = "tcn"  # tcn(=smartBSEntry) | smartBSEntryV2 | smartBSTF | smartBSDualTF
+    backbone: str = "tcn"  # tcn(=smartBSEntry) | smartBSEntryV2 | smartBSTF
     num_inputs: int = 39
     num_channels: List[int] = field(default_factory=lambda: [32, 32, 48, 48])
     kernel_size: int = 3

@@ -1,75 +1,71 @@
 //@version=5
-// SmartBSRMIndicator — Risk-Manager strategy + overlay for 1m / 5m / 15m / 1h / 4h / 1d.
-// 4 MAs, last 2 pivot pairs (same Pivot Channel points), Kelly zones, suggested lot.
-// Dual-TF RSI R marks (major+minor within pivot length) + 4-MA stack pullback P.
-// Optional pivot-channel trendlines (settings toggle).
-// Strategy Tester: enter only in last-pivot safe zone; SL = that pivot price; TP = 3× SL distance.
-strategy("SmartBSRMIndicator", overlay=true,
-     initial_capital=200,
-     default_qty_type=strategy.fixed,
-     default_qty_value=0.1,
-     pyramiding=0,
-     process_orders_on_close=true,
-     calc_on_every_tick=false,
+// SmartBSRMIndicator — overlay: 4 MAs, swing pivots, RollE, safe zones.
+// Regime: bull/bear = RollE streak + MA + RSI; else sideways (sticky until RollE up/down).
+indicator("SmartBSRMIndicator", overlay=true,
      max_bars_back=5000,
      max_labels_count=500,
      max_lines_count=500,
-     max_boxes_count=50)
+     max_boxes_count=100)
 
 // ═══════════════════════════════════════════════════════════════════════
 // Inputs
 // ═══════════════════════════════════════════════════════════════════════
 grpCore = "Core"
 pivotLen = input.int(9, "Pivot lookback", minval=1, maxval=100, group=grpCore,
-     tooltip="Bars before and after to confirm a high/low. Shared by zones, marks, regime HH/HL, and pivot-channel trendlines.")
+     tooltip="Bars before and after to confirm a high/low. Shared by zones and pivot-channel trendlines.")
 kellySize = input.string("Quad", "Kelly size", options=["100%", "Half", "Quad"], group=grpCore)
-stratMode = input.string("Combo", "Entry mode", options=["Mean Reverse", "Trend Pullback", "Combo"], group=grpCore,
-     tooltip="Which zone logic arms entries (same as prior Strategy input).")
-showPivots = input.bool(false, "Show pivot high/low triangles", group=grpCore)
+showPivots = input.bool(false, "Show swing pivot triangles", group=grpCore,
+     tooltip="ta.pivothigh/low triangles (confirm after Pivot lookback bars). Independent of RollE.")
+showMa = input.bool(true, "Show 4 MAs", group=grpCore)
 
-grpLot = "Position size"
+grpRolle = "RollE points"
+showRollePoints = input.bool(true, "Show RollE points & links", group=grpRolle,
+     tooltip="Rolling-extreme updates: high == max(high,L) or low == min(low,L). Circles + links between consecutive REH/REL.")
+rolleLen = input.int(5, "RollE length L", minval=2, maxval=100, group=grpRolle,
+     tooltip="Window for rolling max high / min low (same L as rolle_breakout labels). Try 5 / 9 / 12.")
+showRolleLinks = input.bool(true, "Link consecutive RollE points", group=grpRolle)
+showRolleExt = input.bool(false, "Show RollE dotted extensions", group=grpRolle,
+     tooltip="Off = hide/clear RollE projection lines (points & solid links stay). On = ATR-filtered dotted extensions like swing pivots.")
+rolleKeep = input.int(80, "Max RollE marks kept", minval=10, maxval=200, group=grpRolle)
+colRolleHi = input.color(color.new(#FF7043, 0), "RollE high color", group=grpRolle)
+colRolleLo = input.color(color.new(#7E57C2, 0), "RollE low color", group=grpRolle)
+showRMarks = input.bool(true, "Mark RollE pivot R", group=grpRolle,
+     tooltip="R on RollE highs/lows that are fractal pivots: highest/lowest in [lookback … lookforward] bars.")
+rolleRLeft = input.int(3, "R look back", minval=1, maxval=50, group=grpRolle)
+rolleRRight = input.int(3, "R look forward", minval=1, maxval=50, group=grpRolle)
+colRHi = input.color(color.new(#EF5350, 0), "R high color", group=grpRolle)
+colRLo = input.color(color.new(#26A69A, 0), "R low color", group=grpRolle)
+rKeep = input.int(80, "Max R marks kept", minval=10, maxval=200, group=grpRolle)
+
+grpRegime = "RollE regime"
+showRegime = input.bool(true, "Show regime bgcolor", group=grpRegime,
+     tooltip="Bull/bear: 2+ same-side RollE + not fully against fast MA + RSI. Otherwise sideways; sideways stays until a new RollE up/down break.")
+regimeTrans = input.int(92, "Regime transparency", minval=70, maxval=98, step=1, group=grpRegime,
+     tooltip="Pine transparency: higher = lower opacity (fainter). Default 92 ≈ 8% opacity.")
+colRegUp = input.color(color.new(#26A69A, 0), "Regime up color", group=grpRegime)
+colRegDn = input.color(color.new(#EF5350, 0), "Regime down color", group=grpRegime)
+colRegSide = input.color(color.new(color.gray, 0), "Regime sideways color", group=grpRegime)
+rsiRegLen = input.int(14, "Regime RSI length", minval=2, maxval=100, group=grpRegime)
+rsiRegBull = input.float(50.0, "Bull RSI >", minval=40.0, maxval=90.0, step=1.0, group=grpRegime)
+rsiRegBear = input.float(50.0, "Bear RSI <", minval=10.0, maxval=60.0, step=1.0, group=grpRegime)
+
+grpLot = "Position size (zone width)"
 baseLot = input.float(0.1, "Lot size", minval=0.01, step=0.01, group=grpLot,
-     tooltip="Fixed lot for strategy entries and risk→price distance (default 0.1).")
+     tooltip="Used for Kelly risk → max stop distance (zone width).")
 accountSize = input.float(200.0, "Account size ($)", minval=1.0, step=10.0, group=grpLot,
-     tooltip="Used for Kelly risk / zone width. Strategy Tester initial capital defaults to 200.")
-leverageIn = input.string("1:500", "Leverage", group=grpLot,
-     tooltip="Format 1:N (e.g. 1:500) or plain N.")
-
-grpBT = "Strategy tester"
-enableOrders = input.bool(true, "Enable strategy orders", group=grpBT,
-     tooltip="Enter long/short only inside the last pivot safe zone. Stop = last pivot. Take profit = 3× that stop distance from entry.")
-oneEntryPerZone = input.bool(true, "One entry per zone visit", group=grpBT,
-     tooltip="If on, enter once when price enters the zone; wait until leaving before re-arming. If off, re-enter whenever flat while still in zone.")
-
-grpRegime = "Trend regime"
-showRegime = input.bool(true, "Show regime bgcolor", group=grpRegime)
-requireRegime = input.bool(true, "Require regime for valid zones", group=grpRegime,
-     tooltip="Buy only in HH+HL uptrend, sell only in LH+LL downtrend.")
-regimeTrans = input.int(92, "Regime transparency", minval=70, maxval=98, step=1, group=grpRegime)
-colSide = input.color(color.new(color.gray, 0), "Sideways color", group=grpRegime)
-
-grpMarks = "R / P marks"
-showRMarks = input.bool(true, "Show RSI R marks", group=grpMarks,
-     tooltip="R when minor-TF RSI(14) completes 80→below 50 (short) or 20→above 50 (long).")
-showPMarks = input.bool(true, "Show pullback P marks", group=grpMarks,
-     tooltip="P on 3-MA stack pullbacks (mid/slow/long): price pulls into slow or long, then reclaim mid.")
-rsiHiExt = input.float(80.0, "RSI high extreme (arm short)", group=grpMarks)
-rsiLoExt = input.float(20.0, "RSI low extreme (arm long)", group=grpMarks)
-rsiMidLvl = input.float(50.0, "RSI mid confirm", group=grpMarks)
-colRLong = input.color(color.new(#26A69A, 0), "R long color", group=grpMarks)
-colRShort = input.color(color.new(#EF5350, 0), "R short color", group=grpMarks)
-colP = input.color(color.new(#FFD54F, 0), "P pullback color", group=grpMarks)
+     tooltip="Used for Kelly risk / zone width.")
 
 grpZone = "Safe entry zones"
 showZones = input.bool(true, "Show horizontal buy/sell zones", group=grpZone)
+zoneSource = input.string("RollE", "Zone source", options=["RollE", "Swing pivots", "Both"], group=grpZone,
+     tooltip="RollE or swing pivots as level source. Zones use highs above / lows below current price.")
 zoneMode = input.string("Last 2", "Zone mode", options=["Last only", "Last 2"], group=grpZone,
-     tooltip="Last only: newest H/L bands. Last 2: bands for each of the last 2 buy and last 2 sell pivots.")
+     tooltip="Last only: one band each side. Last 2: up to two highest levels above price (sell) and two lowest below price (buy).")
 zoneTrans = input.int(82, "Zone fill transparency", minval=50, maxval=95, step=1, group=grpZone)
-showTable = input.bool(true, "Show info table", group=grpZone)
 
-grpTL = "Pivot channel trendlines"
-showPivotChannel = input.bool(true, "Show pivot channel trendlines", group=grpTL,
-     tooltip="Pivot-to-pivot channels, ATR-filtered extension lines, and breakout Up/Down labels. Uses Core pivot lookback.")
+grpTL = "Swing pivot channel"
+showPivotChannel = input.bool(true, "Show swing pivot points & links", group=grpTL,
+     tooltip="Fractal swing pivots (Pivot lookback): circles, pivot-to-pivot links, ATR extensions, Up/Down. Independent of RollE.")
 tlExtBars = input.int(70, "Trendline extension (bars)", minval=1, group=grpTL,
      tooltip="How far to project extension lines and watch for breakouts.")
 tlExtStyleIn = input.string("Dotted", "Extension line style", options=["Dashed", "Dotted", "Solid"], group=grpTL)
@@ -79,29 +75,14 @@ showTlDashes = input.bool(true, "Show last pivot price", group=grpTL,
      tooltip="Horizontal line and price label on the latest high and low pivots.")
 tlDashStyleIn = input.string("Dashed", "Last-pivot line style", options=["Dashed", "Dotted", "Solid"], group=grpTL)
 showTlDir = input.bool(true, "Mark all extension breakouts", group=grpTL,
-     tooltip="Place a label at every bar where close breaks an active pivot-high or pivot-low extension line.")
+     tooltip="Up when the full candle closes above the active high line/extension (low > line). Down when the full candle closes below the low line/extension (high < line).")
 tlBreakMax = input.int(100, "Max breakout marks kept", minval=10, maxval=500, group=grpTL)
-
-grpSess = "Session separators"
-showSessionSep = input.bool(true, "Show session vertical separators", group=grpSess,
-     tooltip="Vertical lines at UTC session opens. Default Normal: Tokyo 00, London 07, NY 12, off 21. Adjusted: off at 20.")
-sessionHoursMode = input.string("Normal", "Session hours", options=["Normal", "Adjusted"], group=grpSess,
-     tooltip="Normal (default): Tokyo 00–09 / London 07–16 / NY 12–21. Adjusted: Tokyo 00–07 / London 07–12 / NY 12–20.")
-sessSepStyleIn = input.string("Dotted", "Separator style", options=["Dotted", "Dashed", "Solid"], group=grpSess)
-sessSepWidth = input.int(1, "Separator width", minval=1, maxval=3, group=grpSess)
-colSessTokyo = input.color(color.new(#42A5F5, 50), "Tokyo open", group=grpSess)
-colSessLondon = input.color(color.new(#AB47BC, 50), "London open", group=grpSess)
-colSessNy = input.color(color.new(#FFA726, 50), "New York open", group=grpSess)
-colSessOff = input.color(color.new(color.gray, 60), "Off-hours (20:00)", group=grpSess)
-showSessOff = input.bool(true, "Mark off-hours start (20:00)", group=grpSess)
-sessSepMax = input.int(80, "Max separators kept", minval=10, maxval=200, group=grpSess)
 
 // Fixed defaults (not in settings)
 maFastLen = 14
 maMidLen = 48
 maSlowLen = 120
 maLongLen = 180
-rsiLen = 14
 minLot = 0.01
 maxLot = 10.0
 usdPerLotPerPrice = 100.0  // XAU: 1.0 lot → $100 PnL per +$1 price
@@ -115,17 +96,16 @@ colLongMa = #EF5350
 colPivotHi = #EF5350
 colPivotLo = #26A69A
 
-MAX_PAIRS = 2
+// Lines / marks: opacity 30. Circles (pivot + RollE dots) only: opacity 70.
+MARK_TRANS = 30
+CIRCLE_TRANS = 70
+f_mark(color c) =>
+    color.new(c, MARK_TRANS)
+f_circle(color c) =>
+    color.new(c, CIRCLE_TRANS)
 
-// Minor TF one step below chart (for RSI R marks)
-f_minor_tf() =>
-    timeframe.isintraday and timeframe.multiplier <= 1 ? "1" :
-     timeframe.isintraday and timeframe.multiplier <= 5 ? "1" :
-     timeframe.isintraday and timeframe.multiplier <= 15 ? "5" :
-     timeframe.isintraday and timeframe.multiplier <= 60 ? "15" :
-     timeframe.isintraday and timeframe.multiplier <= 240 ? "60" :
-     timeframe.isdaily ? "240" :
-     "60"
+MAX_PAIRS = 2
+ZONE_HIST = 40  // keep enough H/L history to pick levels vs current price
 
 // ═══════════════════════════════════════════════════════════════════════
 // Kelly risk ($) + lot → max stop distance in price
@@ -135,30 +115,13 @@ float riskAmount = accountSize * kellyFrac
 float lotShow = math.max(minLot, math.min(maxLot, baseLot))
 float moneyPerPrice = lotShow * usdPerLotPerPrice
 float maxStopDist = riskAmount / math.max(moneyPerPrice, 1e-12)
-int colonPos = str.pos(leverageIn, ":")
-float levParsed = not na(colonPos) ? str.tonumber(str.substring(leverageIn, colonPos + 1)) : str.tonumber(leverageIn)
-float leverage = na(levParsed) or levParsed < 1.0 ? 500.0 : levParsed
-float marginEst = close * moneyPerPrice / math.max(leverage, 1.0)
 
 // ═══════════════════════════════════════════════════════════════════════
-// Shared pivots (Pivot Channel lookback) + 4 MAs
-// Zones, triangles, and trendlines all use these same points.
+// Shared pivots + 4 MAs
 // ═══════════════════════════════════════════════════════════════════════
 float phRaw = ta.pivothigh(high, pivotLen, pivotLen)
 float plRaw = ta.pivotlow(low, pivotLen, pivotLen)
 int pivBar = math.max(0, bar_index - pivotLen)
-
-// Consecutive confirmed pivots for structure regime (HH/HL vs LH/LL)
-var float prevPh = na
-var float lastPh = na
-var float prevPl = na
-var float lastPl = na
-if not na(phRaw)
-    prevPh := lastPh
-    lastPh := phRaw
-if not na(plRaw)
-    prevPl := lastPl
-    lastPl := plRaw
 
 float maFast = ta.ema(close, maFastLen)
 float maMid = ta.ema(close, maMidLen)
@@ -169,8 +132,9 @@ float atrPiv = ta.atr(pivotLen)
 float atrCh = ta.atr(200)
 
 // ═══════════════════════════════════════════════════════════════════════
-// Last 2 pivot H/L — labels + entry bands (same Pivot Channel points)
-// Zones update on candle close. Break above H / below L removes that zone.
+// Last 2 pivot H/L — labels + entry bands
+// Swing-pivot zones: break above H / below L removes that zone.
+// RollE zones: keep last 1–2 updates (no break-drop).
 // ═══════════════════════════════════════════════════════════════════════
 var label[] phLabs = array.new_label()
 var label[] plLabs = array.new_label()
@@ -178,8 +142,14 @@ var float[] phPrices = array.new_float()
 var int[] phBars = array.new_int()
 var float[] plPrices = array.new_float()
 var int[] plBars = array.new_int()
+var float[] reZonePhPrices = array.new_float()
+var int[] reZonePhBars = array.new_int()
+var float[] reZonePlPrices = array.new_float()
+var int[] reZonePlBars = array.new_int()
 var box[] buyBoxes = array.new_box()
 var box[] sellBoxes = array.new_box()
+var box[] buyBoxesRe = array.new_box()
+var box[] sellBoxesRe = array.new_box()
 
 f_trim_labs(label[] labs) =>
     while array.size(labs) > MAX_PAIRS
@@ -189,21 +159,22 @@ f_clear_labs(label[] labs) =>
     while array.size(labs) > 0
         label.delete(array.shift(labs))
 
-f_trim_piv(float[] prices, int[] bars) =>
-    while array.size(prices) > MAX_PAIRS
+f_trim_zone(float[] prices, int[] bars) =>
+    while array.size(prices) > ZONE_HIST
         array.shift(prices)
         array.shift(bars)
 
-f_add_piv(float[] prices, int[] bars, float price, int xBar) =>
+f_add_zone(float[] prices, int[] bars, float price, int xBar) =>
     array.push(prices, price)
     array.push(bars, xBar)
-    f_trim_piv(prices, bars)
+    f_trim_zone(prices, bars)
 
 f_add_pivot_mark(label[] labs, float price, int xBar, color labCol, bool isHigh) =>
+    color mc = f_mark(labCol)
     array.push(labs, label.new(xBar, price, "",
          style=isHigh ? label.style_triangledown : label.style_triangleup,
-         color=labCol,
-         textcolor=labCol,
+         color=mc,
+         textcolor=mc,
          size=size.tiny))
     f_trim_labs(labs)
 
@@ -217,23 +188,8 @@ f_sync_boxes(box[] boxes, int want) =>
     while array.size(boxes) < want
         array.push(boxes, box.new(bar_index, close, bar_index, close, border_color=color.new(color.gray, 100), bgcolor=color.new(color.gray, 100), border_width=2))
 
-f_drop_broken_highs(float[] prices, int[] bars, float pxHigh) =>
-    if array.size(prices) > 0
-        for i = array.size(prices) - 1 to 0
-            if pxHigh > array.get(prices, i)
-                array.remove(prices, i)
-                array.remove(bars, i)
-
-f_drop_broken_lows(float[] prices, int[] bars, float pxLow) =>
-    if array.size(prices) > 0
-        for i = array.size(prices) - 1 to 0
-            if pxLow < array.get(prices, i)
-                array.remove(prices, i)
-                array.remove(bars, i)
-
 float bandDist = math.max(maxStopDist, nz(atrPiv, maxStopDist))
 
-// Pivot labels can appear as soon as the pivot confirms
 if not na(phRaw) and showPivots
     f_add_pivot_mark(phLabs, phRaw, pivBar, colPivotHi, true)
 if not na(plRaw) and showPivots
@@ -242,141 +198,121 @@ if not showPivots
     f_clear_labs(phLabs)
     f_clear_labs(plLabs)
 
-// Zone state + drawings update only when a candle finishes
 if barstate.isconfirmed
-    f_drop_broken_highs(phPrices, phBars, high)
-    f_drop_broken_lows(plPrices, plBars, low)
-
     if not na(phRaw)
-        f_add_piv(phPrices, phBars, phRaw, pivBar)
+        f_add_zone(phPrices, phBars, phRaw, pivBar)
     if not na(plRaw)
-        f_add_piv(plPrices, plBars, plRaw, pivBar)
+        f_add_zone(plPrices, plBars, plRaw, pivBar)
 
-    if showZones
-        color buyFill = color.new(colBuy, zoneTrans)
-        color sellFill = color.new(colSell, zoneTrans)
-        int zoneKeep = zoneMode == "Last only" ? 1 : MAX_PAIRS
-        int zoneRight = bar_index  // last finished candle (open-position assumption)
+// Same-side bands overlap when their price intervals share range (width = bandDist).
+f_zone_overlap(float a, float b) =>
+    math.abs(a - b) < bandDist
 
-        int nBuyAll = array.size(plPrices)
-        int nBuy = math.min(nBuyAll, zoneKeep)
-        f_sync_boxes(buyBoxes, nBuy)
-        if nBuy > 0
-            for i = 0 to nBuy - 1
-                int idx = nBuyAll - nBuy + i
-                float pl = array.get(plPrices, idx)
-                int left = array.get(plBars, idx)
-                box b = array.get(buyBoxes, i)
-                box.set_lefttop(b, left, pl + bandDist)
-                box.set_rightbottom(b, zoneRight, pl)
-                box.set_bgcolor(b, buyFill)
-                box.set_border_color(b, color.new(colBuy, 100))
-                box.set_border_width(b, 0)
+f_idx_picked(int[] picked, int idx) =>
+    bool found = false
+    if array.size(picked) > 0
+        for j = 0 to array.size(picked) - 1
+            if array.get(picked, j) == idx
+                found := true
+                break
+    found
 
-        int nSellAll = array.size(phPrices)
-        int nSell = math.min(nSellAll, zoneKeep)
-        f_sync_boxes(sellBoxes, nSell)
-        if nSell > 0
-            for i = 0 to nSell - 1
-                int idx = nSellAll - nSell + i
-                float ph = array.get(phPrices, idx)
-                int left = array.get(phBars, idx)
-                box b = array.get(sellBoxes, i)
-                box.set_lefttop(b, left, ph)
-                box.set_rightbottom(b, zoneRight, ph - bandDist)
-                box.set_bgcolor(b, sellFill)
-                box.set_border_color(b, color.new(colSell, 100))
-                box.set_border_width(b, 0)
-    else
-        f_clear_boxes(buyBoxes)
-        f_clear_boxes(sellBoxes)
+// Among levels above ref, pick up to `keep` highest prices (newer wins ties); skip overlaps.
+f_pick_highest_above(float[] prices, float ref, int keep) =>
+    int[] picked = array.new_int()
+    int n = array.size(prices)
+    if n > 0 and keep > 0
+        for k = 1 to keep
+            int best = -1
+            float bestPx = na
+            for i = 0 to n - 1
+                if f_idx_picked(picked, i)
+                    continue
+                float px = array.get(prices, i)
+                if px <= ref
+                    continue
+                bool better = best < 0 or px > bestPx or (px == bestPx and i > best)
+                if better
+                    bool overlaps = false
+                    if array.size(picked) > 0
+                        for j = 0 to array.size(picked) - 1
+                            if f_zone_overlap(px, array.get(prices, array.get(picked, j)))
+                                overlaps := true
+                                break
+                    if not overlaps
+                        best := i
+                        bestPx := px
+            if best < 0
+                break
+            array.push(picked, best)
+    picked
 
-// Active last pivots (still valid) for signals / table
-float pivHi = array.size(phPrices) > 0 ? array.get(phPrices, array.size(phPrices) - 1) : na
-float pivLo = array.size(plPrices) > 0 ? array.get(plPrices, array.size(plPrices) - 1) : na
-float buyZoneTop = not na(pivLo) ? pivLo + maxStopDist : na
-float sellZoneBot = not na(pivHi) ? pivHi - maxStopDist : na
+// Among levels below ref, pick up to `keep` lowest prices (newer wins ties); skip overlaps.
+f_pick_lowest_below(float[] prices, float ref, int keep) =>
+    int[] picked = array.new_int()
+    int n = array.size(prices)
+    if n > 0 and keep > 0
+        for k = 1 to keep
+            int best = -1
+            float bestPx = na
+            for i = 0 to n - 1
+                if f_idx_picked(picked, i)
+                    continue
+                float px = array.get(prices, i)
+                if px >= ref
+                    continue
+                bool better = best < 0 or px < bestPx or (px == bestPx and i > best)
+                if better
+                    bool overlaps = false
+                    if array.size(picked) > 0
+                        for j = 0 to array.size(picked) - 1
+                            if f_zone_overlap(px, array.get(prices, array.get(picked, j)))
+                                overlaps := true
+                                break
+                    if not overlaps
+                        best := i
+                        bestPx := px
+            if best < 0
+                break
+            array.push(picked, best)
+    picked
 
-bool inBuyBand = not na(buyZoneTop) and not na(pivLo) and low <= buyZoneTop and high >= pivLo
-bool inSellBand = not na(sellZoneBot) and not na(pivHi) and high >= sellZoneBot and low <= pivHi
-bool meanRevBuy = inBuyBand
-bool meanRevSell = inSellBand
-
-// ═══════════════════════════════════════════════════════════════════════
-// R marks — minor TF RSI(14): 20→above 50 (long) or 80→below 50 (short)
-// ═══════════════════════════════════════════════════════════════════════
-// arm: +1 wait mid↑ after ≤loExt | −1 wait mid↓ after ≥hiExt | 0 idle
-f_rsi_mid_journey(float rsi, float hiExt, float loExt, float mid) =>
-    var int arm = 0
-    if rsi >= hiExt
-        arm := -1
-    else if rsi <= loExt
-        arm := 1
-    int done = 0
-    if arm == 1 and ta.crossover(rsi, mid)
-        done := 1
-        arm := 0
-    else if arm == -1 and ta.crossunder(rsi, mid)
-        done := -1
-        arm := 0
-    done
-
-string tfMinor = f_minor_tf()
-int minDone = request.security(syminfo.tickerid, tfMinor, f_rsi_mid_journey(ta.rsi(close, rsiLen), rsiHiExt, rsiLoExt, rsiMidLvl), barmerge.gaps_off, barmerge.lookahead_off)
-
-bool rLongFire = showRMarks and minDone == 1 and minDone[1] != 1
-bool rShortFire = showRMarks and minDone == -1 and minDone[1] != -1
-
-if rLongFire and barstate.isconfirmed
-    label.new(bar_index, low, "R",
-         style=label.style_label_up,
-         color=colRLong,
-         textcolor=color.white,
-         size=size.small)
-if rShortFire and barstate.isconfirmed
-    label.new(bar_index, high, "R",
-         style=label.style_label_down,
-         color=colRShort,
-         textcolor=color.white,
-         size=size.small)
-
-// ═══════════════════════════════════════════════════════════════════════
-// P marks — 3-MA stack pullback (mid / slow / long), touch slow or long
-// Up:   mid>slow>long, pull into slow|long → reclaim mid
-// Down: mid<slow<long, pull into slow|long → reclaim mid
-// ═══════════════════════════════════════════════════════════════════════
-bool stackUp3 = maMid > maSlow and maSlow > maLong
-bool stackDn3 = maMid < maSlow and maSlow < maLong
-var bool pbDipUp = false
-var bool pbDipDn = false
-if not stackUp3
-    pbDipUp := false
-else if low <= maSlow or low <= maLong
-    pbDipUp := true
-if not stackDn3
-    pbDipDn := false
-else if high >= maSlow or high >= maLong
-    pbDipDn := true
-
-bool pLongFire = showPMarks and stackUp3 and pbDipUp and ta.crossover(close, maMid)
-bool pShortFire = showPMarks and stackDn3 and pbDipDn and ta.crossunder(close, maMid)
-if pLongFire and barstate.isconfirmed
-    pbDipUp := false
-    label.new(bar_index, low, "P",
-         style=label.style_label_up,
-         color=colP,
-         textcolor=color.black,
-         size=size.small)
-if pShortFire and barstate.isconfirmed
-    pbDipDn := false
-    label.new(bar_index, high, "P",
-         style=label.style_label_down,
-         color=colP,
-         textcolor=color.black,
-         size=size.small)
+f_paint_zones(box[] buyArr, box[] sellArr, float[] loPrices, int[] loBars, float[] hiPrices, int[] hiBars, color buyFill, color sellFill) =>
+    int zoneKeep = zoneMode == "Last only" ? 1 : MAX_PAIRS
+    int zoneRight = bar_index
+    float pxRef = close
+    // Buy: up to N lowest levels below price. Sell: up to N highest levels above price.
+    int[] buyIdx = f_pick_lowest_below(loPrices, pxRef, zoneKeep)
+    int nBuy = array.size(buyIdx)
+    f_sync_boxes(buyArr, nBuy)
+    if nBuy > 0
+        for i = 0 to nBuy - 1
+            int idx = array.get(buyIdx, i)
+            float pl = array.get(loPrices, idx)
+            int left = array.get(loBars, idx)
+            box b = array.get(buyArr, i)
+            box.set_lefttop(b, left, pl + bandDist)
+            box.set_rightbottom(b, zoneRight, pl)
+            box.set_bgcolor(b, buyFill)
+            box.set_border_color(b, color.new(colBuy, 100))
+            box.set_border_width(b, 0)
+    int[] sellIdx = f_pick_highest_above(hiPrices, pxRef, zoneKeep)
+    int nSell = array.size(sellIdx)
+    f_sync_boxes(sellArr, nSell)
+    if nSell > 0
+        for i = 0 to nSell - 1
+            int idx = array.get(sellIdx, i)
+            float ph = array.get(hiPrices, idx)
+            int left = array.get(hiBars, idx)
+            box b = array.get(sellArr, i)
+            box.set_lefttop(b, left, ph)
+            box.set_rightbottom(b, zoneRight, ph - bandDist)
+            box.set_bgcolor(b, sellFill)
+            box.set_border_color(b, color.new(colSell, 100))
+            box.set_border_width(b, 0)
 
 // ═══════════════════════════════════════════════════════════════════════
-// Pivot channel trendlines (toggle) — same phRaw / plRaw / pivBar
+// Pivot channel trendlines
 // Adapted from Pivot Channel TrendLines [BigBeluga], CC BY-NC-SA 4.0.
 // ═══════════════════════════════════════════════════════════════════════
 tlDashStyle = tlDashStyleIn == "Dashed" ? line.style_dashed : tlDashStyleIn == "Dotted" ? line.style_dotted : line.style_solid
@@ -411,21 +347,25 @@ f_trim_break_labs() =>
 f_add_break_lab(int xBar, float y, string txt, color col, bool isUp) =>
     array.push(tlBreakLabs, label.new(xBar, y, txt,
          style=isUp ? label.style_label_up : label.style_label_down,
-         color=col,
-         textcolor=color.white,
+         color=f_mark(col),
+         textcolor=color.new(color.white, MARK_TRANS),
          size=size.small))
     f_trim_break_labs()
 
 if not na(phRaw)
     if showPivotChannel
-        label.new(pivBar, phRaw, style=label.style_circle, size=size.tiny, color=color.new(tlPhColor, 50))
+        label.new(pivBar, phRaw, "●",
+             style=label.style_none,
+             size=size.normal,
+             textcolor=f_circle(tlPhColor),
+             color=color.new(color.white, 100))
     if tlPhReady and pivBar != tlPhIndx
         float tlSlope = (phRaw - tlPhVal) / (pivBar - tlPhIndx)
         if showPivotChannel
-            line.new(tlPhIndx, tlPhVal, pivBar, phRaw, width=2, color=tlPhColor)
+            line.new(tlPhIndx, tlPhVal, pivBar, phRaw, width=2, color=f_mark(tlPhColor))
         if phRaw < tlPhVal and (tlPhVal - phRaw) >= atrCh
             if showPivotChannel
-                line.new(pivBar, phRaw, pivBar + tlExtBars, phRaw + tlSlope * tlExtBars, style=tlExtStyle, color=tlPhColor)
+                line.new(pivBar, phRaw, pivBar + tlExtBars, phRaw + tlSlope * tlExtBars, style=tlExtStyle, color=f_mark(tlPhColor))
             tlUpperBar := pivBar
             tlUpperY := phRaw
             tlUpperSlope := tlSlope
@@ -436,19 +376,23 @@ if not na(phRaw)
     if showPivotChannel and showTlDashes
         line.delete(tlPhDash)
         label.delete(tlPhDashLab)
-        tlPhDash := line.new(pivBar, phRaw, bar_index, phRaw, style=tlDashStyle, color=tlPhColor, width=1)
-        tlPhDashLab := label.new(bar_index, phRaw, text=str.tostring(phRaw, format.mintick), style=label.style_label_left, color=tlPhColor, textcolor=color.white, size=size.small)
+        tlPhDash := line.new(pivBar, phRaw, bar_index, phRaw, style=tlDashStyle, color=f_mark(tlPhColor), width=1)
+        tlPhDashLab := label.new(bar_index, phRaw, text=str.tostring(phRaw, format.mintick), style=label.style_label_left, color=f_mark(tlPhColor), textcolor=color.new(color.white, MARK_TRANS), size=size.small)
 
 if not na(plRaw)
     if showPivotChannel
-        label.new(pivBar, plRaw, style=label.style_circle, size=size.tiny, color=color.new(tlPlColor, 50))
+        label.new(pivBar, plRaw, "●",
+             style=label.style_none,
+             size=size.normal,
+             textcolor=f_circle(tlPlColor),
+             color=color.new(color.white, 100))
     if tlPlReady and pivBar != tlPlIndx
         float tlSlope = (plRaw - tlPlVal) / (pivBar - tlPlIndx)
         if showPivotChannel
-            line.new(tlPlIndx, tlPlVal, pivBar, plRaw, width=2, color=tlPlColor)
+            line.new(tlPlIndx, tlPlVal, pivBar, plRaw, width=2, color=f_mark(tlPlColor))
         if tlPlVal < plRaw and (plRaw - tlPlVal) >= atrCh
             if showPivotChannel
-                line.new(pivBar, plRaw, pivBar + tlExtBars, plRaw + tlSlope * tlExtBars, style=tlExtStyle, color=tlPlColor)
+                line.new(pivBar, plRaw, pivBar + tlExtBars, plRaw + tlSlope * tlExtBars, style=tlExtStyle, color=f_mark(tlPlColor))
             tlLowerBar := pivBar
             tlLowerY := plRaw
             tlLowerSlope := tlSlope
@@ -459,8 +403,8 @@ if not na(plRaw)
     if showPivotChannel and showTlDashes
         line.delete(tlPlDash)
         label.delete(tlPlDashLab)
-        tlPlDash := line.new(pivBar, plRaw, bar_index, plRaw, style=tlDashStyle, color=tlPlColor, width=1)
-        tlPlDashLab := label.new(bar_index, plRaw, text=str.tostring(plRaw, format.mintick), style=label.style_label_left, color=tlPlColor, textcolor=color.white, size=size.small)
+        tlPlDash := line.new(pivBar, plRaw, bar_index, plRaw, style=tlDashStyle, color=f_mark(tlPlColor), width=1)
+        tlPlDashLab := label.new(bar_index, plRaw, text=str.tostring(plRaw, format.mintick), style=label.style_label_left, color=f_mark(tlPlColor), textcolor=color.new(color.white, MARK_TRANS), size=size.small)
 
 bool upMark = false
 bool dnMark = false
@@ -468,7 +412,7 @@ if tlUpperOn
     int barsPassedUpper = bar_index - tlUpperBar
     if barsPassedUpper <= tlExtBars and barsPassedUpper >= 0
         float expectedUpper = tlUpperY + tlUpperSlope * barsPassedUpper
-        if close > expectedUpper and barstate.isconfirmed
+        if barstate.isconfirmed and low > expectedUpper
             upMark := true
             tlUpperOn := false
     else if barsPassedUpper > tlExtBars
@@ -477,7 +421,7 @@ if tlLowerOn
     int barsPassedLower = bar_index - tlLowerBar
     if barsPassedLower <= tlExtBars and barsPassedLower >= 0
         float expectedLower = tlLowerY + tlLowerSlope * barsPassedLower
-        if close < expectedLower and barstate.isconfirmed
+        if barstate.isconfirmed and high < expectedLower
             dnMark := true
             tlLowerOn := false
     else if barsPassedLower > tlExtBars
@@ -500,153 +444,230 @@ if showPivotChannel and showTlDashes and barstate.islast
         label.set_x(tlPlDashLab, bar_index)
 
 // ═══════════════════════════════════════════════════════════════════════
-// Trend regime from consecutive pivots
-// UP:   last PH > prev PH and last PL > prev PL (HH + HL)
-// DOWN: last PH < prev PH and last PL < prev PL (LH + LL)
-// else SIDE
+// RollE points — rolling extreme updates (causal; no forward confirm lag)
 // ═══════════════════════════════════════════════════════════════════════
-bool havePhPair = not na(prevPh) and not na(lastPh)
-bool havePlPair = not na(prevPl) and not na(lastPl)
-bool regimeUp = havePhPair and havePlPair and lastPh > prevPh and lastPl > prevPl
-bool regimeDn = havePhPair and havePlPair and lastPh < prevPh and lastPl < prevPl
-string regimeTxt = regimeUp ? "BULL" : regimeDn ? "BEAR" : "SIDE"
+var int rePhBar = na
+var float rePhVal = na
+var int rePlBar = na
+var float rePlVal = na
+var label[] reHiLabs = array.new_label()
+var label[] reLoLabs = array.new_label()
+var line[] reHiLines = array.new_line()
+var line[] reLoLines = array.new_line()
+var line[] reHiExtLines = array.new_line()
+var line[] reLoExtLines = array.new_line()
 
-bool tpBuy = regimeUp and inBuyBand
-bool tpSell = regimeDn and inSellBand
-bool rawBuy =
-     stratMode == "Mean Reverse" ? meanRevBuy :
-     stratMode == "Trend Pullback" ? tpBuy :
-     (meanRevBuy or tpBuy)
-bool rawSell =
-     stratMode == "Mean Reverse" ? meanRevSell :
-     stratMode == "Trend Pullback" ? tpSell :
-     (meanRevSell or tpSell)
-bool validBuy = rawBuy and (not requireRegime or regimeUp)
-bool validSell = rawSell and (not requireRegime or regimeDn)
+f_re_dash_all(line[] lines) =>
+    int n = array.size(lines)
+    if n > 0
+        for i = 0 to n - 1
+            line.set_style(array.get(lines, i), line.style_dashed)
 
-// ═══════════════════════════════════════════════════════════════════════
-// Strategy Tester — last-pivot safe zone only; SL = last pivot point; TP = 3× risk
-// Buy zone: [pivLo, pivLo+maxStopDist] → long, stop = pivLo, limit = entry + 3*(entry-pivLo)
-// Sell zone: [pivHi-maxStopDist, pivHi] → short, stop = pivHi, limit = entry - 3*(pivHi-entry)
-// ═══════════════════════════════════════════════════════════════════════
-var bool buyZoneArmed = true
-var bool sellZoneArmed = true
-if not validBuy
-    buyZoneArmed := true
-if not validSell
-    sellZoneArmed := true
+f_re_solid_last(line[] lines) =>
+    int n = array.size(lines)
+    if n > 0
+        line.set_style(array.get(lines, n - 1), line.style_solid)
 
-bool longOk = enableOrders and validBuy and (not oneEntryPerZone or buyZoneArmed) and strategy.position_size <= 0
-bool shortOk = enableOrders and validSell and (not oneEntryPerZone or sellZoneArmed) and strategy.position_size >= 0
+float rolleWinHi = ta.highest(high, rolleLen)
+float rolleWinLo = ta.lowest(low, rolleLen)
+bool rolleUpdHi = bar_index >= rolleLen - 1 and high == rolleWinHi
+bool rolleUpdLo = bar_index >= rolleLen - 1 and low == rolleWinLo
 
-if barstate.isconfirmed and enableOrders
-    if longOk and not na(pivLo)
-        strategy.entry("Long", strategy.long, qty=lotShow)
-        float longRisk = close - pivLo
-        if longRisk > 0
-            strategy.exit("XL", from_entry="Long", stop=pivLo, limit=close + 3.0 * longRisk)
+if not showRolleExt
+    while array.size(reHiExtLines) > 0
+        line.delete(array.shift(reHiExtLines))
+    while array.size(reLoExtLines) > 0
+        line.delete(array.shift(reLoExtLines))
+
+if not showRollePoints
+    while array.size(reHiLabs) > 0
+        label.delete(array.shift(reHiLabs))
+    while array.size(reLoLabs) > 0
+        label.delete(array.shift(reLoLabs))
+    while array.size(reHiLines) > 0
+        line.delete(array.shift(reHiLines))
+    while array.size(reLoLines) > 0
+        line.delete(array.shift(reLoLines))
+    while array.size(reHiExtLines) > 0
+        line.delete(array.shift(reHiExtLines))
+    while array.size(reLoExtLines) > 0
+        line.delete(array.shift(reLoExtLines))
+    rePhBar := na
+    rePhVal := na
+    rePlBar := na
+    rePlVal := na
+
+// Zone tracking for RollE always runs (even if dots/links hidden).
+if barstate.isconfirmed
+    if rolleUpdHi
+        f_add_zone(reZonePhPrices, reZonePhBars, high, bar_index)
+    if rolleUpdLo
+        f_add_zone(reZonePlPrices, reZonePlBars, low, bar_index)
+
+// Regime: bull/bear need RollE streak + MA + RSI; else sideways.
+// Sideways is sticky until a new RollE update breaks with RollE-up / RollE-down structure.
+// R mark: RollE update that is also a fractal pivot (lookback / lookforward bars).
+var int reLastSide = 0  // +1 REH, -1 REL
+var int reStreakN = 0
+var int reRegimeState = 2  // 1 up, -1 down, 2 sideways
+var label[] rHiLabs = array.new_label()
+var label[] rLoLabs = array.new_label()
+
+f_add_r_mark(label[] labs, int xBar, float y, bool isHi) =>
+    array.push(labs, label.new(xBar, y, "R",
+         style=isHi ? label.style_label_down : label.style_label_up,
+         color=f_mark(isHi ? colRHi : colRLo),
+         textcolor=color.new(color.white, MARK_TRANS),
+         size=size.small))
+    while array.size(labs) > rKeep
+        label.delete(array.shift(labs))
+
+// Pivot window = lookback + center + lookforward: R if that RollE bar is window high/low
+int rolleRWin = rolleRLeft + rolleRRight + 1
+int rePivotBar = math.max(0, bar_index - rolleRRight)
+bool rePivotHiOk = bar_index >= rolleRWin - 1 and rolleUpdHi[rolleRRight] and high[rolleRRight] == ta.highest(high, rolleRWin)
+bool rePivotLoOk = bar_index >= rolleRWin - 1 and rolleUpdLo[rolleRRight] and low[rolleRRight] == ta.lowest(low, rolleRWin)
+
+if barstate.isconfirmed
+    if showRMarks and rePivotHiOk
+        f_add_r_mark(rHiLabs, rePivotBar, high[rolleRRight], true)
+    if showRMarks and rePivotLoOk
+        f_add_r_mark(rLoLabs, rePivotBar, low[rolleRRight], false)
+    bool bothSides = rolleUpdHi and rolleUpdLo
+    if bothSides
+        reLastSide := 0
+        reStreakN := 0
+    else if rolleUpdHi
+        reStreakN := reLastSide == 1 ? reStreakN + 1 : 1
+        reLastSide := 1
+    else if rolleUpdLo
+        reStreakN := reLastSide == -1 ? reStreakN + 1 : 1
+        reLastSide := -1
+
+if not showRMarks
+    while array.size(rHiLabs) > 0
+        label.delete(array.shift(rHiLabs))
+    while array.size(rLoLabs) > 0
+        label.delete(array.shift(rLoLabs))
+
+bool reStreakOk = reStreakN >= 2 and reLastSide != 0
+// Against trend = full [high,low] clear on the wrong side of fast MA
+bool barAgainstUp = high < maFast
+bool barAgainstDn = low > maFast
+float rsiMajor = ta.rsi(close, rsiRegLen)
+// RollE-up / RollE-down structure (streak + MA); RSI gates bull/bear entry from non-sideways
+bool rolleUp = reStreakOk and reLastSide == 1 and not barAgainstUp
+bool rolleDn = reStreakOk and reLastSide == -1 and not barAgainstDn
+bool bullOk = rolleUp and rsiMajor > rsiRegBull
+bool bearOk = rolleDn and rsiMajor < rsiRegBear
+
+if barstate.isconfirmed
+    if reRegimeState == 2
+        // Sticky sideways: only a new RollE up/down can break it
+        if rolleUpdHi or rolleUpdLo
+            if rolleUp
+                reRegimeState := 1
+            else if rolleDn
+                reRegimeState := -1
+    else
+        if bullOk
+            reRegimeState := 1
+        else if bearOk
+            reRegimeState := -1
         else
-            strategy.exit("XL", from_entry="Long", stop=pivLo)
-        buyZoneArmed := false
-    else if strategy.position_size > 0 and not na(pivLo)
-        float longEntry = strategy.position_avg_price
-        float longRisk = longEntry - pivLo
-        if longRisk > 0
-            strategy.exit("XL", from_entry="Long", stop=pivLo, limit=longEntry + 3.0 * longRisk)
+            reRegimeState := 2
+
+int reRegime = reRegimeState
+
+if showRollePoints and barstate.isconfirmed
+    if rolleUpdHi
+        array.push(reHiLabs, label.new(bar_index, high, "●",
+             style=label.style_none,
+             size=size.normal,
+             textcolor=f_circle(colRolleHi),
+             color=color.new(color.white, 100)))
+        while array.size(reHiLabs) > rolleKeep
+            label.delete(array.shift(reHiLabs))
+        if not na(rePhBar) and rePhBar != bar_index
+            float reHiSlope = (high - rePhVal) / (bar_index - rePhBar)
+            if showRolleLinks
+                array.push(reHiLines, line.new(rePhBar, rePhVal, bar_index, high,
+                     width=2, color=f_mark(colRolleHi), style=line.style_solid))
+                while array.size(reHiLines) > rolleKeep
+                    line.delete(array.shift(reHiLines))
+                f_re_dash_all(reHiLines)
+                f_re_solid_last(reHiLines)
+                f_re_dash_all(reLoLines)
+            if showRolleExt and high < rePhVal and (rePhVal - high) >= atrCh
+                array.push(reHiExtLines, line.new(bar_index, high, bar_index + tlExtBars, high + reHiSlope * tlExtBars,
+                     style=line.style_dashed, color=f_mark(colRolleHi)))
+                while array.size(reHiExtLines) > rolleKeep
+                    line.delete(array.shift(reHiExtLines))
+                f_re_dash_all(reHiExtLines)
+                f_re_solid_last(reHiExtLines)
+                f_re_dash_all(reLoExtLines)
+        rePhBar := bar_index
+        rePhVal := high
+    if rolleUpdLo
+        array.push(reLoLabs, label.new(bar_index, low, "●",
+             style=label.style_none,
+             size=size.normal,
+             textcolor=f_circle(colRolleLo),
+             color=color.new(color.white, 100)))
+        while array.size(reLoLabs) > rolleKeep
+            label.delete(array.shift(reLoLabs))
+        if not na(rePlBar) and rePlBar != bar_index
+            float reLoSlope = (low - rePlVal) / (bar_index - rePlBar)
+            if showRolleLinks
+                array.push(reLoLines, line.new(rePlBar, rePlVal, bar_index, low,
+                     width=2, color=f_mark(colRolleLo), style=line.style_solid))
+                while array.size(reLoLines) > rolleKeep
+                    line.delete(array.shift(reLoLines))
+                f_re_dash_all(reLoLines)
+                f_re_solid_last(reLoLines)
+                f_re_dash_all(reHiLines)
+            if showRolleExt and rePlVal < low and (low - rePlVal) >= atrCh
+                array.push(reLoExtLines, line.new(bar_index, low, bar_index + tlExtBars, low + reLoSlope * tlExtBars,
+                     style=line.style_dashed, color=f_mark(colRolleLo)))
+                while array.size(reLoExtLines) > rolleKeep
+                    line.delete(array.shift(reLoExtLines))
+                f_re_dash_all(reLoExtLines)
+                f_re_solid_last(reLoExtLines)
+                f_re_dash_all(reHiExtLines)
+        rePlBar := bar_index
+        rePlVal := low
+
+// Safe zones
+if barstate.isconfirmed
+    if showZones
+        color buyFill = color.new(colBuy, zoneTrans)
+        color sellFill = color.new(colSell, zoneTrans)
+        bool usePivotZ = zoneSource == "Swing pivots" or zoneSource == "Both"
+        bool useRolleZ = zoneSource == "RollE" or zoneSource == "Both"
+        if usePivotZ
+            f_paint_zones(buyBoxes, sellBoxes, plPrices, plBars, phPrices, phBars, buyFill, sellFill)
         else
-            strategy.exit("XL", from_entry="Long", stop=pivLo)
-
-    if shortOk and not na(pivHi)
-        strategy.entry("Short", strategy.short, qty=lotShow)
-        float shortRisk = pivHi - close
-        if shortRisk > 0
-            strategy.exit("XS", from_entry="Short", stop=pivHi, limit=close - 3.0 * shortRisk)
+            f_clear_boxes(buyBoxes)
+            f_clear_boxes(sellBoxes)
+        if useRolleZ
+            f_paint_zones(buyBoxesRe, sellBoxesRe, reZonePlPrices, reZonePlBars, reZonePhPrices, reZonePhBars, buyFill, sellFill)
         else
-            strategy.exit("XS", from_entry="Short", stop=pivHi)
-        sellZoneArmed := false
-    else if strategy.position_size < 0 and not na(pivHi)
-        float shortEntry = strategy.position_avg_price
-        float shortRisk = pivHi - shortEntry
-        if shortRisk > 0
-            strategy.exit("XS", from_entry="Short", stop=pivHi, limit=shortEntry - 3.0 * shortRisk)
-        else
-            strategy.exit("XS", from_entry="Short", stop=pivHi)
+            f_clear_boxes(buyBoxesRe)
+            f_clear_boxes(sellBoxesRe)
+    else
+        f_clear_boxes(buyBoxes)
+        f_clear_boxes(sellBoxes)
+        f_clear_boxes(buyBoxesRe)
+        f_clear_boxes(sellBoxesRe)
 
-plot(maFast, "EMA Fast", color=colFast, linewidth=1)
-plot(maMid, "EMA Mid", color=colMid, linewidth=1)
-plot(maSlow, "EMA Slow", color=colSlow, linewidth=1)
-plot(maLong, "SMA Long", color=colLongMa, linewidth=2)
-
-// ═══════════════════════════════════════════════════════════════════════
-// Session separators (UTC). Default Normal: Tokyo 0–9 / London 7–16 / NY 12–21
-// Adjusted opt-in: Tokyo 0–7 / London 7–12 / NY 12–20
-// Session-id change so higher TFs still mark when the exact open hour is skipped.
-// ═══════════════════════════════════════════════════════════════════════
-sessSepStyle = sessSepStyleIn == "Dashed" ? line.style_dashed : sessSepStyleIn == "Dotted" ? line.style_dotted : line.style_solid
-var line[] sessSepLines = array.new_line()
-
-int sessOffHour = sessionHoursMode == "Adjusted" ? 20 : 21
-f_sess_id(int h) =>
-    h >= sessOffHour ? 0 : h >= 12 ? 3 : h >= 7 ? 2 : 1
-
-int utcH = hour(time, "UTC")
-int utcHPrev = bar_index > 0 ? hour(time[1], "UTC") : utcH
-int sessId = f_sess_id(utcH)
-int sessIdPrev = f_sess_id(utcHPrev)
-bool sessChanged = sessId != sessIdPrev
-bool markThisSess = sessChanged and (sessId != 0 or showSessOff)
-
-color sessSepCol =
-     sessId == 1 ? colSessTokyo :
-     sessId == 2 ? colSessLondon :
-     sessId == 3 ? colSessNy :
-     colSessOff
-
-if showSessionSep and markThisSess and barstate.isconfirmed
-    line ln = line.new(time, high, time, low,
-         xloc=xloc.bar_time,
-         extend=extend.both,
-         style=sessSepStyle,
-         width=sessSepWidth,
-         color=sessSepCol)
-    array.push(sessSepLines, ln)
-    while array.size(sessSepLines) > sessSepMax
-        line.delete(array.shift(sessSepLines))
-
-if not showSessionSep
-    while array.size(sessSepLines) > 0
-        line.delete(array.shift(sessSepLines))
+plot(showMa ? maFast : na, "EMA Fast", color=f_mark(colFast), linewidth=1)
+plot(showMa ? maMid : na, "EMA Mid", color=f_mark(colMid), linewidth=1)
+plot(showMa ? maSlow : na, "EMA Slow", color=f_mark(colSlow), linewidth=1)
+plot(showMa ? maLong : na, "SMA Long", color=f_mark(colLongMa), linewidth=2)
 
 color regimeBg =
      not showRegime ? na :
-     regimeUp ? color.new(colBuy, regimeTrans) :
-     regimeDn ? color.new(colSell, regimeTrans) :
-     color.new(colSide, regimeTrans)
-bgcolor(regimeBg, title="Trend regime")
-
-color rcolShow = regimeUp ? colBuy : regimeDn ? colSell : colSide
-
-var table info = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 75), border_width=1)
-if showTable and barstate.islast
-    table.cell(info, 0, 0, "SmartBSRM", text_color=color.white, text_size=size.small)
-    table.cell(info, 1, 0, stratMode, text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 1, "TF", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 1, timeframe.period, text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 2, "Kelly", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 2, kellySize, text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 3, "Risk $", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 3, str.tostring(riskAmount, "#.##"), text_color=color.yellow, text_size=size.small)
-    table.cell(info, 0, 4, "Lot", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 4, str.tostring(lotShow, "#.####"), text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 5, "Max SL dist", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 5, str.tostring(maxStopDist, format.mintick), text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 6, "Account", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 6, str.tostring(accountSize, "#") + " @1:" + str.tostring(leverage, "#"), text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 7, "Regime", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 7, regimeTxt, text_color=rcolShow, text_size=size.small)
-    table.cell(info, 0, 8, "Zone", text_color=color.gray, text_size=size.tiny)
-    string ztxt = validBuy and validSell ? "BOTH" : validBuy ? "BUY" : validSell ? "SELL" : "—"
-    color zcol = validBuy and not validSell ? colBuy : validSell and not validBuy ? colSell : color.gray
-    table.cell(info, 1, 8, ztxt, text_color=zcol, text_size=size.small)
-    table.cell(info, 0, 9, "Margin~", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 9, str.tostring(marginEst, "#.##"), text_color=color.gray, text_size=size.tiny)
+     reRegime == 2 ? color.new(colRegSide, regimeTrans) :
+     reRegime > 0 ? color.new(colRegUp, regimeTrans) :
+     color.new(colRegDn, regimeTrans)
+bgcolor(regimeBg, title="RollE regime")

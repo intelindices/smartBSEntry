@@ -33,8 +33,9 @@ def predict_probs(
     df_15m: pd.DataFrame | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """Return ``(n, 3)`` softmax probs aligned to ``df_1h`` + ckpt config."""
-    from smartbs_engines.model import BACKBONE_SMARTBS_DUAL_TF, normalize_backbone
+    from smartbs_engines.model import normalize_backbone
 
+    del df_15m  # DualTF removed
     model, cfg = load_classifier(checkpoint_path, device=device)
     from smartbs_engines.common_channels import set_session_hours_mode
 
@@ -44,7 +45,7 @@ def predict_probs(
     set_session_hours_mode("normal" if _sh in (None, "") else _sh)
     lookback = int(cfg.get("lookback", 64))
     temperature = float(cfg.get("temperature", 1.0) or 1.0)
-    backbone = normalize_backbone(cfg.get("backbone"))
+    normalize_backbone(cfg.get("backbone"))  # reject removed DualTF
     sym = symbol or cfg.get("trade_pair")
     src = data_source or cfg.get("data_source")
     feats = build_feature_matrix(
@@ -61,47 +62,6 @@ def predict_probs(
         return out, cfg
 
     device = next(model.parameters()).device
-
-    if backbone == BACKBONE_SMARTBS_DUAL_TF:
-        from smartbs_engines.features import build_1h_to_15m_end_index
-        from smartbs_engines.smart_money_structure import load_aligned_15m
-
-        if df_15m is None:
-            df_15m = load_aligned_15m(df_1h, symbol=sym, data_source=src)
-        if df_15m is None or len(df_15m) < 16:
-            raise RuntimeError("predict DualTF: aligned 15m data unavailable")
-        feats_15 = build_feature_matrix(
-            df_15m,
-            feature_engine=cfg.get("feature_engine", "maribbon"),
-            symbol=sym,
-            data_source=src,
-            signal_engines=cfg.get("signal_engines") or None,
-            ablation_zero_group=str(cfg.get("ablation_zero_group", "") or ""),
-        )
-        ratio = int(cfg.get("tf_ratio", 4) or 4)
-        lb15 = int(cfg.get("lookback_15m", 0) or 0) or lookback * ratio
-        end15 = build_1h_to_15m_end_index(
-            df_1h["open_time"].to_numpy(dtype=np.int64),
-            df_15m["open_time"].to_numpy(dtype=np.int64),
-        )
-        w1_list, w15_list, idxs = [], [], []
-        for i in range(lookback - 1, n):
-            e15 = int(end15[i])
-            if e15 < lb15 - 1:
-                continue
-            w1_list.append(feats[i - lookback + 1 : i + 1].T)
-            w15_list.append(feats_15[e15 - lb15 + 1 : e15 + 1].T)
-            idxs.append(i)
-        if not idxs:
-            return out, cfg
-        x1 = torch.from_numpy(np.stack(w1_list, axis=0)).float().to(device)
-        x15 = torch.from_numpy(np.stack(w15_list, axis=0)).float().to(device)
-        with torch.no_grad():
-            logits = model(x1, x15).detach().cpu().numpy()
-        probs = softmax_np(logits, temperature)
-        for j, i in enumerate(idxs):
-            out[i] = probs[j]
-        return out, cfg
 
     windows = []
     idxs = []

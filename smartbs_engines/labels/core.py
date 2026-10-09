@@ -14,20 +14,15 @@ consequences follow:
 Labels are also engine-independent, so they are computed once per asset and
 reused across every ``STEngine``.
 
-Also: ``label_next_direction`` — next-bar range break of the current candle:
-LONG if next high > high; SHORT if next low < low; inside → FLAT; both-side
-break → side with larger excursion wins.
-
-Also: ``label_session_direction`` — session open→close return vs ±pct
-(default ±0.5%): LONG / SHORT / FLAT for the whole session.
-
 Also: ``label_session_trend`` — at each 1h bar in the pred window
 (``[session_start−1h, session_end−1h)``), first touch of
 ``±k*ATR(14)`` before session end (default k=2): LONG / SHORT / FLAT.
 
-Also: ``label_pivot_breakout`` — rolling extremes over ``pivot_length``:
-update window high → LONG, update window low → SHORT; else first strict
-break of the frozen range within the next ``L`` bars, else FLAT.
+Also: ``label_rolle_breakout`` — in the next ``rolle_length`` bars, if a
+RollE high updates (only) → LONG; RollE low updates (only) → SHORT;
+neither or both → FLAT.
+
+Removed: ``pct_barrier``, ``session_direction``, ``next_direction``.
 """
 
 from __future__ import annotations
@@ -46,7 +41,48 @@ DEFAULT_SESSION_TREND_K = 2.0  # ±2*ATR(14) vs session-end close
 DEFAULT_SESSION_TREND_HORIZON = 0  # unused (resolved mask handles tails)
 DEFAULT_SESSION_TREND_PCT = 0.0  # unused
 DEFAULT_DAY_TREND_PCT = 0.01  # ±1% vs today's NY session end close
-DEFAULT_PIVOT_BREAKOUT_LEN = 15  # rolling window / forward scan length
+DEFAULT_ROLLE_LEN = 5  # rolling window length + forward look for updates
+
+
+# Legacy alias (pre-RollE rename). Fractal/swing pivots are unrelated.
+LABEL_MODE_ALIASES = {
+    "pivot_breakout": "rolle_breakout",
+}
+
+def normalize_label_mode(mode: str | None) -> str:
+    from smartbs_engines.labels.plugins import normalize_label_mode as _norm
+
+    return _norm(mode)
+
+
+def rolle_len_of(cfg) -> int:
+    """Read ``rolle_len`` from config/dict; accept legacy ``pivot_len``."""
+    if isinstance(cfg, dict):
+        v = cfg.get("rolle_len", cfg.get("pivot_len", DEFAULT_ROLLE_LEN))
+    else:
+        v = getattr(cfg, "rolle_len", None)
+        if v is None:
+            v = getattr(cfg, "pivot_len", DEFAULT_ROLLE_LEN)
+    try:
+        return max(int(v or DEFAULT_ROLLE_LEN), 1)
+    except (TypeError, ValueError):
+        return DEFAULT_ROLLE_LEN
+
+
+def normalize_ckpt_config(cfg: dict) -> dict:
+    """In-place: ``pivot_breakout``→``rolle_breakout``, migrate ``pivot_len``→``rolle_len``.
+
+    Fractal/swing pivot helpers are unrelated and must keep ``pivot`` naming.
+    """
+    if not isinstance(cfg, dict):
+        return cfg
+    if "label_mode" in cfg:
+        cfg["label_mode"] = normalize_label_mode(cfg.get("label_mode"))
+    if cfg.get("rolle_len") is None and cfg.get("pivot_len") is not None:
+        cfg["rolle_len"] = cfg["pivot_len"]
+    return cfg
+
+
 H4_MS = 14_400_000  # 4h bucket
 
 DAY_MS = 86_400_000
@@ -54,11 +90,9 @@ HOUR_MS = 3_600_000
 
 BARRIER_LABEL_MODES: tuple[str, ...] = (
     "triple_barrier",
-    "pct_barrier",
-    "session_direction",
     "session_trend",
     "day_trend",
-    "pivot_breakout",
+    "rolle_breakout",
 )
 
 
@@ -122,34 +156,32 @@ def label_next_direction(
     return labels
 
 
-def label_pivot_breakout(
+def label_rolle_breakout(
     high: np.ndarray,
     low: np.ndarray,
     *,
-    pivot_len: int = DEFAULT_PIVOT_BREAKOUT_LEN,
+    rolle_len: int = DEFAULT_ROLLE_LEN,
     horizon: int | None = None,
 ) -> BarrierLabels:
-    """Rolling-extreme pivot breakout labels (window = forward scan = ``L``).
+    """RollE forward-update labels (window = forward look = ``L``).
 
-    At closed bar ``t`` with ``L = pivot_len``:
+    RollE update at bar ``i`` (needs ``i >= L-1``):
 
-      win_hi = max(high[t-L+1 .. t])
-      win_lo = min(low[t-L+1 .. t])
-      Updates PH if ``high[t] == win_hi``; Updates PL if ``low[t] == win_lo``.
+      upd_hi if ``high[i] == max(high[i-L+1 .. i])``
+      upd_lo if ``low[i]  == min(low[i-L+1 .. i])``
 
-    Rules:
-      1. Update PH only → LONG (immediate, resolved)
-      2. Update PL only → SHORT (immediate, resolved)
-      3. Update both → FLAT ambiguous (unresolved / dropped)
-      4. Else freeze ``(win_hi, win_lo)`` and scan forward up to ``L`` bars:
-         first ``high > win_hi`` → LONG; first ``low < win_lo`` → SHORT;
-         same-bar both → FLAT ambiguous; no break → FLAT range-hold (resolved)
-      5. Warmup ``t < L-1`` and tail ``t > n-1-L`` → unresolved
+    At closed bar ``t``, inspect upcoming bars ``t+1 .. t+L``:
 
-    ``horizon`` is ignored; the forward scan length is always ``pivot_len``.
+      1. Any upd_hi and no upd_lo → LONG (resolved)
+      2. Any upd_lo and no upd_hi → SHORT (resolved)
+      3. Both sides update in the window → FLAT ambiguous
+      4. Neither updates → FLAT resolved
+      5. Tail / bars without full forward window → unresolved
+
+    ``horizon`` is ignored; the forward look is always ``rolle_len``.
     CLASS ids 0/1/2 keep the 3-logit head compatible.
     """
-    del horizon  # forced to pivot_len
+    del horizon  # forced to rolle_len
     high = np.asarray(high, dtype=np.float64)
     low = np.asarray(low, dtype=np.float64)
     if high.shape != low.shape:
@@ -161,50 +193,35 @@ def label_pivot_breakout(
     if n == 0:
         return BarrierLabels(labels=labels, resolved=resolved, ambiguous=ambiguous)
 
-    L = max(int(pivot_len), 1)
-    # Valid decision bars: full L-window behind and L bars of lookahead ahead.
-    for t in range(L - 1, n - L):
-        sl = slice(t - L + 1, t + 1)
-        win_hi = float(np.max(high[sl]))
-        win_lo = float(np.min(low[sl]))
-        upd_ph = high[t] == win_hi
-        upd_pl = low[t] == win_lo
+    L = max(int(rolle_len), 1)
+    upd_hi = np.zeros(n, dtype=bool)
+    upd_lo = np.zeros(n, dtype=bool)
+    for i in range(L - 1, n):
+        sl = slice(i - L + 1, i + 1)
+        upd_hi[i] = high[i] == float(np.max(high[sl]))
+        upd_lo[i] = low[i] == float(np.min(low[sl]))
 
-        if upd_ph and upd_pl:
-            labels[t] = SmartBSConfig.CLASS_FLAT
-            ambiguous[t] = True
-            continue
-        if upd_ph:
+    # Prefix sums so window t+1..t+L is O(1): cs[t+L+1] - cs[t+1]
+    cs_hi = np.concatenate([[0], np.cumsum(upd_hi.astype(np.int64))])
+    cs_lo = np.concatenate([[0], np.cumsum(upd_lo.astype(np.int64))])
+
+    # Need L bars ahead; earliest forward bar t+1 must be able to form RollE (t+1 >= L-1).
+    t0 = max(0, L - 2)
+    for t in range(t0, n - L):
+        n_hi = int(cs_hi[t + L + 1] - cs_hi[t + 1])
+        n_lo = int(cs_lo[t + L + 1] - cs_lo[t + 1])
+        any_hi = n_hi > 0
+        any_lo = n_lo > 0
+        if any_hi and not any_lo:
             labels[t] = SmartBSConfig.CLASS_LONG
             resolved[t] = True
-            continue
-        if upd_pl:
+        elif any_lo and not any_hi:
             labels[t] = SmartBSConfig.CLASS_SHORT
             resolved[t] = True
-            continue
-
-        # Between extremes: first strict break of the frozen window within L bars.
-        decided = False
-        for j in range(1, L + 1):
-            i = t + j
-            broke_hi = high[i] > win_hi
-            broke_lo = low[i] < win_lo
-            if broke_hi and broke_lo:
-                labels[t] = SmartBSConfig.CLASS_FLAT
-                ambiguous[t] = True
-                decided = True
-                break
-            if broke_hi:
-                labels[t] = SmartBSConfig.CLASS_LONG
-                resolved[t] = True
-                decided = True
-                break
-            if broke_lo:
-                labels[t] = SmartBSConfig.CLASS_SHORT
-                resolved[t] = True
-                decided = True
-                break
-        if not decided:
+        elif any_hi and any_lo:
+            labels[t] = SmartBSConfig.CLASS_FLAT
+            ambiguous[t] = True
+        else:
             labels[t] = SmartBSConfig.CLASS_FLAT
             resolved[t] = True
 

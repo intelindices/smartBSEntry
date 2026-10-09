@@ -1,20 +1,4 @@
-"""Composable train/infer pipeline: engines × signal policy × backbone × raw_ai.
-
-Free combination::
-
-    PipelineSpec(engines=(\"macd\",), signal_policy=\"none\", backbone=\"tcn\", raw_ai=\"ai_only\")
-    PipelineSpec(engines=(\"dbb\", \"macd\"), signal_policy=\"onset_side\",
-                 backbone=\"smartBSDualTF\", raw_ai=\"signal_gate\")
-
-Defaults: signal_policy=none, raw_ai=ai_only (raw AI side; no signal gate).
-
-Feature resolution:
-
-* one engine + ``signal_policy=none`` → that engine's channels (legacy path)
-* multiple engines → ``signals:`` bus
-* ``signal_policy=onset_side`` may still train on a single engine's channels;
-  the policy builds the signals bus internally when deciding
-"""
+"""Composable train/infer pipeline: engines × signal policy × backbone × raw_ai."""
 
 from __future__ import annotations
 
@@ -33,7 +17,6 @@ from smartbs_engines.signal_policy import (
     resolve_raw_ai_strategy,
     resolve_signal_policy_name,
 )
-from smartbs_engines.signals import ACTIVE_SIGNAL_SOURCES, normalize_signal_sources
 
 
 @dataclass(frozen=True)
@@ -58,14 +41,17 @@ class PipelineSpec:
         )
         if not engs:
             raise ValueError("PipelineSpec.engines must be non-empty")
+        if len(engs) != 1:
+            raise ValueError(
+                f"PipelineSpec supports one feature engine (got {engs}); "
+                "signals bus was removed"
+            )
         object.__setattr__(self, "engines", engs)
 
     @classmethod
     def from_config(cls, cfg: Any) -> "PipelineSpec":
-        """Build from ``SmartBSConfig`` or checkpoint dict."""
         if hasattr(cfg, "feature_engine"):
             fe = getattr(cfg, "feature_engine", "maribbon")
-            sig_eng = getattr(cfg, "signal_engines", ()) or None
             backbone = getattr(cfg, "backbone", "tcn")
             sp = getattr(cfg, "signal_policy", None)
             raw = getattr(cfg, "raw_ai_strategy", None)
@@ -74,7 +60,6 @@ class PipelineSpec:
             gate = bool(getattr(cfg, "signal_point_gate", False))
             d = {
                 "feature_engine": fe,
-                "signal_engines": list(sig_eng) if sig_eng else [],
                 "backbone": backbone,
                 "signal_policy": sp,
                 "raw_ai_strategy": raw,
@@ -85,22 +70,14 @@ class PipelineSpec:
         else:
             d = dict(cfg)
 
-        name, sources = resolve_feature_engine(
-            d.get("feature_engine"),
-            d.get("signal_engines") or None,
-        )
-        if name == "signals":
-            engines = tuple(sources or ACTIVE_SIGNAL_SOURCES)
-        else:
-            engines = (name,)
-
+        name, _sources = resolve_feature_engine(d.get("feature_engine"), None)
         raw_ai = resolve_raw_ai_strategy(d)
         signal_policy = resolve_signal_policy_name(d)
         if sp := d.get("signal_policy"):
             signal_policy = normalize_signal_policy(str(sp))
 
         return cls(
-            engines=engines,
+            engines=(name,),
             signal_policy=signal_policy,
             backbone=str(d.get("backbone") or "tcn"),
             raw_ai=raw_ai,
@@ -109,39 +86,26 @@ class PipelineSpec:
         )
 
     def feature_engine_name(self) -> str:
-        """Canonical ``feature_engine`` string for train/checkpoint."""
-        if len(self.engines) == 1 and self.signal_policy == SIGNAL_POLICY_NONE:
-            return self.engines[0]
-        if len(self.engines) == 1:
-            # Single engine as model features; signal policy may use its own bus.
-            return self.engines[0]
-        return "signals"
+        return self.engines[0]
 
     def signal_engines(self) -> tuple[str, ...]:
-        if self.feature_engine_name() == "signals":
-            return self.engines
-        if self.signal_policy != SIGNAL_POLICY_NONE:
-            return self.engines
         return ()
 
     def resolve_feature_engine(self) -> tuple[str, tuple[str, ...] | None]:
-        name = self.feature_engine_name()
-        if name == "signals":
-            return "signals", normalize_signal_sources(self.engines)
-        return name, None
+        return self.feature_engine_name(), None
 
     def make_signal_policy(self):
         return get_signal_policy(
             self.signal_policy,
-            sources=self.engines if self.signal_policy != SIGNAL_POLICY_NONE else None,
+            sources=None,
             thr=self.signal_thr,
         )
 
     def to_checkpoint_fields(self) -> dict[str, Any]:
-        name, sources = self.resolve_feature_engine()
+        name, _ = self.resolve_feature_engine()
         return {
             "feature_engine": name,
-            "signal_engines": list(sources or self.signal_engines()),
+            "signal_engines": [],
             "pipeline_engines": list(self.engines),
             "signal_policy": self.signal_policy,
             "raw_ai_strategy": self.raw_ai,
@@ -158,7 +122,7 @@ def engines_from_arg(
     feature_engine: str | None = None,
     signal_engines: str | Sequence[str] | None = None,
 ) -> tuple[str, ...]:
-    """Parse CLI/config engine lists into a normalized tuple."""
+    del signal_engines
     if engines is not None and str(engines).strip():
         if isinstance(engines, str):
             parts = [
@@ -166,9 +130,7 @@ def engines_from_arg(
                 for p in engines.replace("+", ",").split(",")
                 if p.strip()
             ]
-            return tuple(parts)
-        return tuple(str(e).strip().lower() for e in engines if str(e).strip())
-    name, sources = resolve_feature_engine(feature_engine, signal_engines)
-    if name == "signals":
-        return tuple(sources or ACTIVE_SIGNAL_SOURCES)
+            return tuple(parts[:1]) if parts else ()
+        return tuple(str(e).strip().lower() for e in list(engines)[:1] if str(e).strip())
+    name, _ = resolve_feature_engine(feature_engine, None)
     return (name,)

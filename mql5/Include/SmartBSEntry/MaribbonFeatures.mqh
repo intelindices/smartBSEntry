@@ -221,7 +221,7 @@ bool SB_BuildMaribbonFeatureMatrix(const string symbol, double &features[][SB_MA
    err = "";
    SBOhlc h1, m15, m5;
    int want = MathMax(SB_MARIBBON_WARMUP + 512, 2000);
-   if(!SB_CopyRatesChrono(symbol, PERIOD_H1, want, h1))
+   if(!SB_CopyRatesChrono(symbol, SB_PrimaryTf(), want, h1))
      {
       err = "not enough H1 bars";
       return false;
@@ -290,7 +290,7 @@ bool SB_BuildMaribbonBase1hMatrix(const string symbol,
    err = "";
    SBOhlc h1;
    int want = MathMax(SB_MARIBBON_WARMUP + 512, 2000);
-   if(!SB_CopyRatesChrono(symbol, PERIOD_H1, want, h1))
+   if(!SB_CopyRatesChrono(symbol, SB_PrimaryTf(), want, h1))
      {
       err = "not enough H1 bars";
       return false;

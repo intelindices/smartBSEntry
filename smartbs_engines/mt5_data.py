@@ -29,7 +29,7 @@ _TF_TO_MT5 = {
 # Ask for the longest practical history; MT5 servers often cap ~80–100k bars.
 _DEFAULT_COUNTS = {
     "1m": 80_000,
-    "5m": 80_000,
+    "5m": 200_000,
     "15m": 80_000,
     "1h": 80_000,
     "4h": 40_000,

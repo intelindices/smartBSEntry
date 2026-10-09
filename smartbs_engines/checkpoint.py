@@ -37,22 +37,14 @@ def checkpoint_spec_fields(
 ) -> dict[str, Any]:
     from smartbs_engines.engines import resolve_feature_engine
 
-    name, sources = resolve_feature_engine(engine_name, signal_engines)
-    eng = (
-        get_engine("signals", signal_sources=sources)
-        if name == "signals"
-        else get_engine(name)
-    )
-    out: dict[str, Any] = {
+    name, _sources = resolve_feature_engine(engine_name, signal_engines)
+    eng = get_engine(name)
+    return {
         ENGINE_KEY: eng.name,
         SPEC_HASH_KEY: eng.spec_hash(),
         WARMUP_KEY: int(eng.warmup_bars),
         "num_inputs": int(eng.num_inputs),
     }
-    if name == "signals":
-        out["signal_engines"] = list(getattr(eng, "sources", ()))
-        out["signal_ids"] = list(eng.feature_names)
-    return out
 
 
 def validate_checkpoint_config(
@@ -62,12 +54,7 @@ def validate_checkpoint_config(
 ) -> tuple[bool, str]:
     try:
         engine_name = normalize_feature_engine(ckpt_cfg.get(ENGINE_KEY) or "maribbon")
-        sig = ckpt_cfg.get("signal_engines")
-        eng = (
-            get_engine("signals", signal_sources=sig)
-            if engine_name == "signals"
-            else get_engine(engine_name)
-        )
+        eng = get_engine(engine_name)
     except ValueError as e:
         return False, str(e)
 
@@ -90,12 +77,7 @@ def validate_checkpoint_config(
 def _assert_feature_spec_current(cfg_dict: dict, checkpoint_path: str) -> None:
     claimed = str(cfg_dict.get("feature_spec_hash") or "").strip()
     engine = normalize_feature_engine(cfg_dict.get("feature_engine") or "maribbon")
-    sig = cfg_dict.get("signal_engines")
-    eng = (
-        get_engine("signals", signal_sources=sig)
-        if engine == "signals"
-        else get_engine(engine)
-    )
+    eng = get_engine(engine)
     n_in = cfg_dict.get("num_inputs")
     if n_in is not None and int(n_in) != eng.num_inputs:
         raise RuntimeError(
@@ -122,6 +104,10 @@ def load_classifier(
     except TypeError:
         payload = torch.load(checkpoint_path, map_location=device)
     cfg_dict = payload["config"]
+    if isinstance(cfg_dict, dict):
+        from smartbs_engines.labels import normalize_ckpt_config
+
+        normalize_ckpt_config(cfg_dict)
     _assert_feature_spec_current(cfg_dict, checkpoint_path)
     backbone = normalize_backbone(cfg_dict.get("backbone"))
     ks = cfg_dict.get("kernel_size")

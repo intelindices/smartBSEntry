@@ -82,20 +82,24 @@ def export_onnx(
         dynamo=False,
     )
 
+    from smartbs_engines.labels import normalize_label_mode, rolle_len_of
+
+    label_mode = normalize_label_mode(cfg.get("label_mode"))
     meta = {
         "checkpoint": os.path.abspath(checkpoint_path),
         "onnx": str(out.resolve()),
         "trade_pair": cfg.get("trade_pair"),
         "feature_engine": cfg.get("feature_engine", "maribbon"),
         "backbone": cfg.get("backbone", "tcn"),
-        "label_mode": cfg.get("label_mode"),
-        "pivot_len": cfg.get("pivot_len"),
+        "label_mode": label_mode,
+        "rolle_len": rolle_len_of(cfg) if label_mode == "rolle_breakout" else cfg.get("rolle_len"),
         "barrier_horizon": cfg.get("barrier_horizon"),
         "feature_spec_hash": cfg.get("feature_spec_hash"),
         "num_inputs": num_inputs,
         "lookback": lookback,
         "num_classes": int(cfg.get("num_classes", 3)),
         "temperature": temperature,
+        "interval": cfg.get("interval") or cfg.get("bar_interval"),
         "num_channels": list(cfg.get("num_channels") or []),
         "kernel_size": cfg.get("kernel_size"),
         "opset": int(opset),

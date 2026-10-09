@@ -93,7 +93,7 @@ bool SB_BuildCommonFeatureMatrix(const string symbol, double &features[][SB_COMM
    int want = MathMax(SB_COMMON_WARMUP + 512, 400);
    // Prefer enough history for lookback-64 + warmup even early in tester.
    want = MathMax(want, SB_COMMON_WARMUP + 128);
-   int got = CopyRates(symbol, PERIOD_H1, 0, want, rates);
+   int got = CopyRates(symbol, SB_PrimaryTf(), 0, want, rates);
    if(got < 10)
      {
       err = "common: not enough H1 bars";
@@ -311,7 +311,7 @@ bool SB_IsSessionFirstBar(const datetime bar_server_time)
    int cur = SB_SessionForBar(bar_server_time, s0, e0);
    if(cur == SB_SESS_NONE)
       return false;
-   datetime prev = bar_server_time - PeriodSeconds(PERIOD_H1);
+   datetime prev = bar_server_time - PeriodSeconds(SB_PrimaryTf());
    int prev_sid = SB_SessionForBar(prev, s1, e1);
    if(prev_sid != cur || s1 != s0)
       return true;
@@ -324,7 +324,7 @@ bool SB_IsSessionDecisionBar(const datetime bar_server_time)
   {
    datetime s0 = 0, e0 = 0, s1 = 0, e1 = 0;
    int cur = SB_SessionForBar(bar_server_time, s0, e0);
-   datetime next = bar_server_time + PeriodSeconds(PERIOD_H1);
+   datetime next = bar_server_time + PeriodSeconds(SB_PrimaryTf());
    int nxt = SB_SessionForBar(next, s1, e1);
    if(nxt == SB_SESS_NONE)
       return false;
@@ -340,7 +340,7 @@ bool SB_IsSessionLastBar(const datetime bar_server_time)
    int cur = SB_SessionForBar(bar_server_time, s0, e0);
    if(cur == SB_SESS_NONE)
       return false;
-   datetime next = bar_server_time + PeriodSeconds(PERIOD_H1);
+   datetime next = bar_server_time + PeriodSeconds(SB_PrimaryTf());
    int nxt = SB_SessionForBar(next, s1, e1);
    if(nxt == SB_SESS_NONE)
       return true;

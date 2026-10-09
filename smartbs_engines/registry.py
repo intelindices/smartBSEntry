@@ -1,16 +1,4 @@
-"""ST-engine registry for all SmartBS feature engines.
-
-Live blend pool: ``ACTIVE_BLEND_ENGINES`` (regime_engine first, then maribbon,
-dbb, trend_pullback, smart_money, macd). ``candle`` and ``rsi_divergence``
-stay registered/trainable.
-
-Every engine from ``get_engine`` gets the shared common channel pack appended
-(OHLCV 1h, tod, session, candle_direction, near_term_trend) — see
-``common_channels.py``.
-
-``signals`` is the modular signal bus; compose with
-``get_engine(\"signals\", signal_sources=(...))`` or ``signals:macd,rsi_divergence``.
-"""
+"""ST-engine runtime registry — backed by ``engines.ENGINE_PLUGINS``."""
 
 from __future__ import annotations
 
@@ -36,7 +24,7 @@ class STEngine(Protocol):
     feature_names: list[str]
     warmup_bars: int
 
-    def compute(self, df: pd.DataFrame) -> EngineResult: ...
+    def compute(self, df: pd.DataFrame, **kwargs) -> EngineResult: ...
 
 
 class BaseSTEngine:
@@ -50,7 +38,7 @@ class BaseSTEngine:
     def num_inputs(self) -> int:
         return len(self.feature_names)
 
-    def compute(self, df: pd.DataFrame) -> EngineResult:  # pragma: no cover
+    def compute(self, df: pd.DataFrame, **kwargs) -> EngineResult:  # pragma: no cover
         raise NotImplementedError
 
     def _finalize(self, columns: list[np.ndarray], n: int) -> EngineResult:
@@ -101,11 +89,26 @@ def slope_unit(
     return atr_unit(series - prev, atr, k=k)
 
 
-_REGISTRY: dict[str, Callable[[], BaseSTEngine]] = {}
+def _plugins():
+    from smartbs_engines.engines import ENGINE_PLUGINS
+    from smartbs_engines.plugins.base import ensure_plugins_loaded
+
+    ensure_plugins_loaded()
+    return ENGINE_PLUGINS
 
 
 def register_engine(name: str, factory: Callable[[], BaseSTEngine]) -> None:
-    _REGISTRY[name.strip().lower()] = factory
+    """Legacy helper — prefer ``engines.register_engine_plugin``."""
+    from smartbs_engines.engines import EnginePlugin, register_engine_plugin
+
+    register_engine_plugin(
+        EnginePlugin(
+            name=name,
+            core_channels=0,
+            factory=factory,
+            mql_define=f"SB_{name.upper()}_CH",
+        )
+    )
 
 
 def get_engine(
@@ -115,31 +118,24 @@ def get_engine(
     attach_common: bool = True,
 ) -> BaseSTEngine:
     """Instantiate an engine. By default appends the common channel pack."""
-    _ensure_registered()
-    from smartbs_engines.signals import SignalsSTEngine, parse_signals_engine_name
+    del signal_sources
+    plugs = _plugins()
+    key = (name or "").strip().lower()
+    if key not in plugs:
+        raise ValueError(f"Unknown engine {name!r}; known: {plugs.names()}")
+    plugin = plugs.get(key)
+    eng: BaseSTEngine = plugin.factory()
 
-    key, parsed_sources = parse_signals_engine_name(name)
-    if key == "signals":
-        sources = signal_sources if signal_sources is not None else parsed_sources
-        eng: BaseSTEngine = SignalsSTEngine(sources=sources)
-    else:
-        key = (name or "").strip().lower()
-        if key not in _REGISTRY:
-            raise ValueError(f"Unknown engine {name!r}; known: {sorted(_REGISTRY)}")
-        eng = _REGISTRY[key]()
-
-    if attach_common:
+    if attach_common and plugin.attach_common:
         from smartbs_engines.common_channels import attach_common_channels
 
-        # Engines may opt out via ``_attach_common = False`` (core-only).
         if getattr(eng, "_attach_common", True):
             eng = attach_common_channels(eng)
     return eng
 
 
 def list_engines() -> list[str]:
-    _ensure_registered()
-    return sorted(_REGISTRY)
+    return _plugins().names()
 
 
 def engine_warmup_bars(name: str) -> int:
@@ -150,78 +146,27 @@ def engine_num_inputs(name: str) -> int:
     return int(get_engine(name).num_inputs)
 
 
-class MARibbonSTEngine(BaseSTEngine):
-    """12 EMAs → 13 base × (1h + 15m + 5m) = 39 channels; no common pack."""
-
-    name = "maribbon"
-    _attach_common = False
-
-    def __init__(self) -> None:
-        from smartbs_engines.maribbon_engine import (
-            MARIBBON_FEATURE_NAMES,
-            MARIBBON_WARMUP_BARS,
-        )
-
-        self.feature_names = list(MARIBBON_FEATURE_NAMES)
-        self.warmup_bars = int(MARIBBON_WARMUP_BARS)
-
-    def compute(
-        self,
-        df: pd.DataFrame,
-        *,
-        symbol: str | None = None,
-        data_source: str | None = None,
-        frames: dict | None = None,
-    ) -> EngineResult:
-        from smartbs_engines.maribbon_engine import compute_maribbon_engine
-
-        eng = compute_maribbon_engine(
-            df, symbol=symbol, data_source=data_source, frames=frames
-        )
-        return EngineResult(features=eng.features, valid_from=eng.valid_from)
+def _blend_names(*, live: bool) -> tuple[str, ...]:
+    plugs = _plugins()
+    out = []
+    for name, p in plugs.items():
+        if live and p.in_blend_live:
+            out.append(name)
+        elif (not live) and p.in_blend_research:
+            out.append(name)
+    return tuple(out)
 
 
-_REGISTERED = False
+def _lazy_blend(live: bool) -> tuple[str, ...]:
+    return _blend_names(live=live)
 
 
-def _ensure_registered() -> None:
-    global _REGISTERED
-    if _REGISTERED:
-        return
-    # Mark early so nested get_engine() during signals init cannot recurse.
-    _REGISTERED = True
-    from smartbs_engines.engine_candle import CandlePatternSTEngine
-    from smartbs_engines.engine_common import CommonOnlySTEngine
-    from smartbs_engines.engine_dbb import SmartBSDbbEngine
-    from smartbs_engines.engine_macd import MACDSTEngine
-    from smartbs_engines.engine_pivot import PivotSTEngine
-    from smartbs_engines.engine_regime import RegimeEngineSTEngine
-    from smartbs_engines.engine_rsi_divergence import RSIDivergenceSTEngine
-    from smartbs_engines.engine_signals import SignalsSTEngine
-    from smartbs_engines.engine_smart_money import SmartMoneySTEngine
-    from smartbs_engines.engine_trend_pullback import TrendPullbackSTEngine
-    from smartbs_engines.engine_all_blend import AllBlendSTEngine
-
-    # regime_engine first — Pine trend-regime (EMA14/48 + close vs mid).
-    register_engine("regime_engine", RegimeEngineSTEngine)
-    register_engine("maribbon", MARibbonSTEngine)
-    register_engine("dbb", SmartBSDbbEngine)
-    register_engine("trend_pullback", TrendPullbackSTEngine)
-    register_engine("smart_money", SmartMoneySTEngine)
-    register_engine("candle", CandlePatternSTEngine)
-    register_engine("macd", MACDSTEngine)
-    register_engine("rsi_divergence", RSIDivergenceSTEngine)
-    register_engine("pivot_engine", PivotSTEngine)
-    register_engine("signals", SignalsSTEngine)
-    register_engine("common", CommonOnlySTEngine)
-    register_engine("all_blend", AllBlendSTEngine)
+# Eager aliases for ``from registry import ACTIVE_BLEND_ENGINES``.
+def __getattr__(name: str):
+    if name in ("ACTIVE_BLEND_ENGINES", "BLEND_LIVE"):
+        return _lazy_blend(True)
+    if name in ("BLEND_ENGINES", "BLEND_RESEARCH"):
+        return _lazy_blend(False)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-from smartbs_engines.engine_catalog import (
-    BLEND_LIVE as ACTIVE_BLEND_ENGINES,
-    BLEND_RESEARCH as BLEND_ENGINES,
-)
-
-# Naming aliases (prefer BLEND_LIVE / BLEND_RESEARCH in new code).
-BLEND_LIVE = ACTIVE_BLEND_ENGINES
-BLEND_RESEARCH = BLEND_ENGINES

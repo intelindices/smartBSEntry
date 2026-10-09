@@ -1,8 +1,7 @@
-"""SmartBS AI backbones: TCN, ModernTCN, Transformer, DualTF (1h+15m).
+"""SmartBS AI backbone modules: TCN, ModernTCN (V2), Transformer (smartBSTF).
 
+Factories / normalize live in ``smartbs_engines.backbones`` (plugin registry).
 ``SmartBSClassifier`` keeps attribute ``self.tcn`` as a checkpoint key prefix.
-``SmartBSEntryV2`` / ``SmartBSTF`` / ``SmartBSDualTF`` are separate backbones
-(new checkpoints).
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ BACKBONE_TCN = "tcn"
 BACKBONE_SMARTBS_ENTRY = "smartBSEntry"  # alias of classic TCN
 BACKBONE_SMARTBS_ENTRY_V2 = "smartBSEntryV2"
 BACKBONE_SMARTBS_TF = "smartBSTF"
-BACKBONE_SMARTBS_DUAL_TF = "smartBSDualTF"
 
 
 class Chomp1d(nn.Module):
@@ -337,124 +335,6 @@ class SmartBSTF(nn.Module):
         return self.head(h[:, -1, :])
 
 
-class SmartBSDualTF(nn.Module):
-    """1H TCN + 15M TCN → time-align → Transformer → fusion MLP → 3-class.
-
-    Pipeline (matches architecture diagram)::
-
-        x_1h (B,C1,T1) ──embed──► TCN(k=3,d=1,2,4) ─┐
-                                                      ├─ align ─► Transformer ─► state ─► MLP ─► logits
-        x_15m(B,C2,T2) ──embed──► TCN(k=3,d=1,2,4) ─┘
-
-    ``T2`` should be ``T1 * tf_ratio`` (default 4) with end-aligned windows so
-    each 1h step maps to ``tf_ratio`` consecutive 15m steps (last kept).
-    """
-
-    def __init__(
-        self,
-        num_inputs: int,
-        num_channels: list[int],
-        num_classes: int = 3,
-        kernel_size: int = 3,
-        dropout: float = 0.2,
-        *,
-        num_inputs_15m: int | None = None,
-        tf_ratio: int = 4,
-        n_heads: int = 4,
-        n_tf_layers: int = 2,
-        max_len: int = 256,
-    ):
-        super().__init__()
-        d_model = int(num_channels[-1]) if num_channels else 64
-        # Exactly 3 TCN blocks → dilations 1, 2, 4
-        tcn_channels = [d_model, d_model, d_model]
-        ks = 3 if kernel_size is None else int(kernel_size)
-        c15 = int(num_inputs_15m) if num_inputs_15m is not None else int(num_inputs)
-        self.d_model = d_model
-        self.tf_ratio = max(1, int(tf_ratio))
-        self.num_inputs_1h = int(num_inputs)
-        self.num_inputs_15m = c15
-
-        self.embed_1h = nn.Sequential(
-            nn.Conv1d(self.num_inputs_1h, d_model, kernel_size=1),
-            nn.GELU(),
-        )
-        self.embed_15m = nn.Sequential(
-            nn.Conv1d(c15, d_model, kernel_size=1),
-            nn.GELU(),
-        )
-        self.tcn_1h = TemporalConvNet(
-            d_model, tcn_channels, kernel_size=ks, dropout=dropout
-        )
-        self.tcn_15m = TemporalConvNet(
-            d_model, tcn_channels, kernel_size=ks, dropout=dropout
-        )
-        self.align_proj = nn.Linear(d_model * 2, d_model)
-        self.pos = nn.Parameter(torch.zeros(1, int(max_len), d_model))
-        nn.init.trunc_normal_(self.pos, std=0.02)
-        heads = _n_heads_for(d_model, n_heads)
-        layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=heads,
-            dim_feedforward=max(d_model * 2, 64),
-            dropout=float(dropout),
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
-        )
-        self.encoder = nn.TransformerEncoder(layer, num_layers=max(1, int(n_tf_layers)))
-        self.norm = nn.LayerNorm(d_model)
-        self.fusion = nn.Sequential(
-            nn.Linear(d_model, d_model),
-            nn.GELU(),
-            nn.Dropout(float(dropout)),
-            nn.Linear(d_model, d_model),
-            nn.GELU(),
-        )
-        self.head = nn.Linear(d_model, int(num_classes))
-
-    def _align_15m(self, h1: torch.Tensor, m15: torch.Tensor) -> torch.Tensor:
-        """Map 15m TCN features onto the 1h time grid (B, D, T1)."""
-        b, d, t1 = h1.shape
-        t15 = m15.size(2)
-        r = self.tf_ratio
-        need = t1 * r
-        if t15 == need:
-            return m15.view(b, d, t1, r)[:, :, :, -1]
-        if t15 > need:
-            m15 = m15[:, :, t15 - need :]
-            return m15.view(b, d, t1, r)[:, :, :, -1]
-        # Shorter 15m window: right-pad by repeating last step, then pool.
-        pad = need - t15
-        m15 = torch.cat([m15, m15[:, :, -1:].expand(b, d, pad)], dim=2)
-        return m15.view(b, d, t1, r)[:, :, :, -1]
-
-    def forward(
-        self,
-        x_1h: torch.Tensor,
-        x_15m: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        if x_15m is None:
-            raise TypeError("SmartBSDualTF requires (x_1h, x_15m)")
-        # Embed → TCN
-        h1 = self.tcn_1h(self.embed_1h(x_1h))
-        m15 = self.tcn_15m(self.embed_15m(x_15m))
-        m15_a = self._align_15m(h1, m15)
-        # Time alignment: concat per-step features → project to d_model
-        tokens = torch.cat([h1.transpose(1, 2), m15_a.transpose(1, 2)], dim=-1)
-        tokens = self.align_proj(tokens)
-        t = tokens.size(1)
-        if t > self.pos.size(1):
-            raise ValueError(f"seq_len {t} > SmartBSDualTF max_len {self.pos.size(1)}")
-        tokens = tokens + self.pos[:, :t, :]
-        mask = torch.triu(
-            torch.ones(t, t, device=tokens.device, dtype=torch.bool), diagonal=1
-        )
-        tokens = self.encoder(tokens, mask=mask)
-        state = self.norm(tokens[:, -1, :])
-        state = self.fusion(state)
-        return self.head(state)
-
 
 def model_forward(model: nn.Module, x, device: torch.device) -> torch.Tensor:
     """Forward helper: single tensor or ``(x_1h, x_15m)`` batch from DataLoader."""
@@ -464,95 +344,24 @@ def model_forward(model: nn.Module, x, device: torch.device) -> torch.Tensor:
 
 
 def normalize_backbone(name: str | None) -> str:
-    raw = str(name or BACKBONE_TCN).strip()
-    key = raw.lower().replace("-", "").replace("_", "")
-    if key in (
-        "smartbsdualtf",
-        "dualtf",
-        "dual",
-        "tcntf",
-        "1h15m",
-        "multitf",
-        "mtf",
-    ):
-        return BACKBONE_SMARTBS_DUAL_TF
-    if raw == BACKBONE_SMARTBS_DUAL_TF:
-        return BACKBONE_SMARTBS_DUAL_TF
-    if key in ("smartbstfv2", "tfv2", "transformerv2", "attnreason", "signaltf"):
-        raise ValueError(
-            "smartBSTFV2 was removed; use smartBSTF or smartBSDualTF"
-        )
-    if key in ("smartbstf", "transformer", "tf", "attn", "attention"):
-        return BACKBONE_SMARTBS_TF
-    if raw == BACKBONE_SMARTBS_TF:
-        return BACKBONE_SMARTBS_TF
-    if key in ("smartbsentryv2", "moderntcn", "v2"):
-        return BACKBONE_SMARTBS_ENTRY_V2
-    if raw == BACKBONE_SMARTBS_ENTRY_V2:
-        return BACKBONE_SMARTBS_ENTRY_V2
-    if key in ("smartbsentry", "tcn", "classic", "v1", ""):
-        return BACKBONE_TCN
-    return BACKBONE_TCN
+    from smartbs_engines.backbones import normalize_backbone as _n
+
+    return _n(name)
 
 
 def default_kernel_size(backbone: str | None) -> int:
-    bb = normalize_backbone(backbone)
-    if bb == BACKBONE_SMARTBS_ENTRY_V2:
-        return 7
-    if bb == BACKBONE_SMARTBS_TF:
-        return 1
-    if bb == BACKBONE_SMARTBS_DUAL_TF:
-        return 3
-    return 3
+    from smartbs_engines.backbones import default_kernel_size as _d
+
+    return _d(backbone)
 
 
-def build_classifier(
-    *,
-    num_inputs: int,
-    num_channels: list[int],
-    num_classes: int = 3,
-    kernel_size: int | None = None,
-    dropout: float = 0.2,
-    backbone: str | None = None,
-    num_inputs_15m: int | None = None,
-    tf_ratio: int = 4,
-) -> nn.Module:
-    """Factory: TCN, V2, TF, or DualTF (1h+15m)."""
-    bb = normalize_backbone(backbone)
-    if bb == BACKBONE_SMARTBS_DUAL_TF:
-        ks = 3 if kernel_size is None else int(kernel_size)
-        return SmartBSDualTF(
-            num_inputs=num_inputs,
-            num_channels=list(num_channels),
-            num_classes=num_classes,
-            kernel_size=ks,
-            dropout=dropout,
-            num_inputs_15m=num_inputs_15m,
-            tf_ratio=int(tf_ratio),
-        )
-    if bb == BACKBONE_SMARTBS_TF:
-        ks = 1 if kernel_size is None else int(kernel_size)
-        return SmartBSTF(
-            num_inputs=num_inputs,
-            num_channels=list(num_channels),
-            num_classes=num_classes,
-            kernel_size=ks,
-            dropout=dropout,
-        )
-    if bb == BACKBONE_SMARTBS_ENTRY_V2:
-        ks = 7 if kernel_size is None else int(kernel_size)
-        return SmartBSEntryV2(
-            num_inputs=num_inputs,
-            num_channels=list(num_channels),
-            num_classes=num_classes,
-            kernel_size=ks,
-            dropout=dropout,
-        )
-    ks = 3 if kernel_size is None else int(kernel_size)
-    return SmartBSClassifier(
-        num_inputs=num_inputs,
-        num_channels=list(num_channels),
-        num_classes=num_classes,
-        kernel_size=ks,
-        dropout=dropout,
-    )
+def backbone_stem_tag(backbone: str | None) -> str:
+    from smartbs_engines.backbones import backbone_stem_tag as _t
+
+    return _t(backbone)
+
+
+def build_classifier(**kwargs) -> nn.Module:
+    from smartbs_engines.backbones import build_classifier as _b
+
+    return _b(**kwargs)

@@ -17,7 +17,7 @@ bool SB_LastSwingR(const string symbol, const int swing_len,
    swing_low = 0.0;
    SBOhlc h1;
    int need = MathMax(200, swing_len * 40 + 64);
-   if(!SB_CopyRatesChrono(symbol, PERIOD_H1, need, h1))
+   if(!SB_CopyRatesChrono(symbol, SB_PrimaryTf(), need, h1))
      {
       err = "swing: not enough H1";
       return false;
@@ -43,7 +43,7 @@ bool SB_LastSwingR(const string symbol, const int swing_len,
    return true;
   }
 
-// Closed-bar H1 close + SMA(fast_len). Returns false if not ready.
+// Closed-bar H1 close + EMA(fast_len). Returns false if not ready.
 bool SB_ClosedBarFastMa(const string symbol, const int fast_len,
                         double &close_out, double &ma_out, string &err)
   {
@@ -52,7 +52,7 @@ bool SB_ClosedBarFastMa(const string symbol, const int fast_len,
    ma_out = 0.0;
    SBOhlc h1;
    int need = MathMax(fast_len + 8, 64);
-   if(!SB_CopyRatesChrono(symbol, PERIOD_H1, need, h1))
+   if(!SB_CopyRatesChrono(symbol, SB_PrimaryTf(), need, h1))
      {
       err = "ma: not enough H1";
       return false;
@@ -62,11 +62,11 @@ bool SB_ClosedBarFastMa(const string symbol, const int fast_len,
       err = "ma: warm-up";
       return false;
      }
-   double sma[];
-   SB_SMA(h1.close, fast_len, sma);
+   double ema[];
+   SB_EMA(h1.close, fast_len, ema);
    int i = h1.n - 2; // closed bar
    close_out = h1.close[i];
-   ma_out = sma[i];
+   ma_out = ema[i];
    if(!MathIsValidNumber(ma_out) || ma_out == EMPTY_VALUE)
      {
       err = "ma: nan";
@@ -104,7 +104,7 @@ bool SB_ClosedBarSuperTrendDir(const string symbol, const int atr_len,
    const double f = (factor > 0.0) ? factor : 3.0;
    SBOhlc h1;
    int need = MathMax(L * 20 + 64, 400);
-   if(!SB_CopyRatesChrono(symbol, PERIOD_H1, need, h1))
+   if(!SB_CopyRatesChrono(symbol, SB_PrimaryTf(), need, h1))
      {
       err = "st: not enough H1";
       return false;
@@ -148,7 +148,7 @@ bool SB_ClosedBarAtr(const string symbol, const int atr_len, double &atr_out, st
    atr_out = 0.0;
    SBOhlc h1;
    int need = MathMax(atr_len * 5 + 64, 200);
-   if(!SB_CopyRatesChrono(symbol, PERIOD_H1, need, h1))
+   if(!SB_CopyRatesChrono(symbol, SB_PrimaryTf(), need, h1))
      {
       err = "atr: not enough H1";
       return false;

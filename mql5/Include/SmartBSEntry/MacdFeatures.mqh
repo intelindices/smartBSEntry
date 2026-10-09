@@ -33,7 +33,7 @@ bool SB_BuildMacdFeatureMatrix(const string symbol, double &features[][SB_MACD_C
    err = "";
    SBOhlc h1;
    int want = MathMax(SB_MACD_WARMUP + 512, 400);
-   if(!SB_CopyRatesChrono(symbol, PERIOD_H1, want, h1))
+   if(!SB_CopyRatesChrono(symbol, SB_PrimaryTf(), want, h1))
      {
       err = "not enough H1 bars";
       return false;

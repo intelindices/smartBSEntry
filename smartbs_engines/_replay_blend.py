@@ -59,15 +59,13 @@ POOLS = {
     "blend_research": tuple(BLEND_ENGINES),
     "blend7": tuple(BLEND_ENGINES),  # legacy alias
     "blend9": (
-        "candle",
         "dbb",
         "macd",
         "maribbon",
-        "regime_engine",
         "rsi_divergence",
-        "signals",
         "smart_money",
         "trend_pullback",
+        "common",
     ),
 }
 

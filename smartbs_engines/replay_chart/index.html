@@ -42,6 +42,10 @@
       background: var(--bg); color: var(--text); border: 1px solid var(--border);
       border-radius: 4px; padding: 5px 8px; font: inherit;
     }
+    select:disabled {
+      opacity: 0.45; cursor: not-allowed; color: var(--muted);
+    }
+    label.disabled-ctl { opacity: 0.55; }
     button { cursor: pointer; }
     button:hover { border-color: var(--accent); color: #fff; }
     #stats {
@@ -68,7 +72,8 @@
     #legend .c-st-up::before { background: var(--st-up); }
     #legend .c-st-dn::before { background: var(--st-dn); }
     #legend .c-pos-long::before { background: var(--green); }
-    #legend .c-short::before { background: var(--red); }
+    #legend .c-sl::before { background: transparent; border: 1.5px dotted rgba(239, 83, 80, 0.55); height: 0; width: 12px; }
+    #legend .c-tp::before { background: transparent; border: 1.5px dotted rgba(38, 166, 154, 0.55); height: 0; width: 12px; }
     #status { color: var(--muted); padding: 0 4px; }
     #priceWrap { position: relative; flex: 3; min-height: 280px; border-bottom: 1px solid var(--border); }
     #price { width: 100%; height: 100%; }
@@ -112,21 +117,84 @@
   <div id="app">
     <header>
       <h1>SmartBS Replay</h1>
+      <label>TF
+        <select id="interval" title="Primary bar timeframe">
+          <option value="5m">5m</option>
+          <option value="15m">15m</option>
+          <option value="1h" selected>1h</option>
+          <option value="4h">4h</option>
+        </select>
+      </label>
       <label>Symbol <select id="symbol"></select></label>
       <label>Label <select id="labelMode"></select></label>
+      <label title="rolle_breakout label L from checkpoint — also used as swing pivot L/R for init SL / R (left=right=L).">
+        RollE L
+        <select id="rolleLen"></select>
+      </label>
       <label>Engine <select id="engine"></select></label>
+      <label>Backbone <select id="backbone"></select></label>
       <label>Window <select id="days"></select></label>
-      <label title="On AI FLAT/flip, hold until SMA14 confirms exit (close&lt;SMA for long, close&gt;SMA for short)">
-        <input type="checkbox" id="exitArm" checked />
-        exit_arm (SMA14)
+      <label title="Candles drawn at once. Smaller TFs default to fewer bars. Pan a zoomed chart to either edge, or use ‹ ›, to load the next chunk.">
+        Chart
+        <select id="chartBars">
+          <option value="auto" selected>Auto</option>
+          <option value="800">800 bars</option>
+          <option value="1500">1500 bars</option>
+          <option value="2500">2500 bars</option>
+          <option value="4000">4000 bars</option>
+        </select>
       </label>
-      <label title="AI onset entry + swing SL + SLBE + ladder. While in trade, raw AI flips/FLAT are ignored — exit only on SL (no R validation).">
-        <input type="checkbox" id="slLadder" />
-        SL ladder
+      <button type="button" id="chartPrev" title="Earlier chunk">‹</button>
+      <button type="button" id="chartNext" title="Later chunk">›</button>
+      <label title="Exit mode: none = AI flatten + absolute swing SL; exit_arm fast/mid = wait for adverse close vs fast EMA14 or mid EMA48 + absolute swing SL; SL ladder = pivot SL → BE@1R → trail.">
+        Exit
+        <select id="exitMode" autocomplete="off">
+          <option value="none" selected>none</option>
+          <option value="exit_arm_fast">exit_arm (fast MA)</option>
+          <option value="exit_arm_mid">exit_arm (mid MA)</option>
+          <option value="sl_ladder">SL ladder</option>
+        </select>
       </label>
-      <label title="Keep long only on ST-bull bars, short only on ST-bear bars. Trades opened against ST are clipped until ST agrees (not dropped).">
-        <input type="checkbox" id="stFilter" checked />
-        ST filter
+      <label title="Gate AI side: none = argmax(FLAT,LONG,SHORT). Else if max(P_long,P_short) &lt; thr → FLAT; otherwise LONG if P_long≥P_short else SHORT (EA InpAiThreshold).">
+        AI thr
+        <select id="aiThreshold" autocomplete="off">
+          <option value="0" selected>none</option>
+          <option value="0.35">35%</option>
+          <option value="0.38">38%</option>
+          <option value="0.40">40%</option>
+          <option value="0.45">45%</option>
+          <option value="0.50">50%</option>
+          <option value="0.55">55%</option>
+          <option value="0.60">60%</option>
+        </select>
+      </label>
+      <label title="Delay fill until close confirms vs EMA14 (long: close&gt;EMA / short: close&lt;EMA). AI arms the side; FLAT clears the arm.">
+        <input type="checkbox" id="entryArm" />
+        entry_arm (EMA14)
+      </label>
+      <label id="rMinLabel" title="Skip open when init swing R &lt; selected % of entry. Applies to none / exit_arm / SL ladder. Off = no min-R gate (swing SL still used as absolute stop for none/exit_arm).">
+        R min
+        <select id="rMinPct" autocomplete="off">
+          <option value="0" selected>off</option>
+          <option value="0.005">0.5%</option>
+          <option value="0.01">1%</option>
+          <option value="0.015">1.5%</option>
+          <option value="0.018">1.8%</option>
+          <option value="0.02">2%</option>
+          <option value="0.025">2.5%</option>
+          <option value="0.03">3%</option>
+        </select>
+      </label>
+      <label title="Regime gate on fixed 1h closed bars only (no leak): ST(1h), MA stack(1h), RSI(14) 1h. RSI&gt;60 long-only, RSI&lt;40 short-only, 40–60 flat.">
+        Regime
+        <select id="regimeFilter" autocomplete="off">
+          <option value="off" selected>off</option>
+          <option value="st">ST filter (1h)</option>
+          <option value="ma2">2 MA stack 1h (fast&gt;mid)</option>
+          <option value="ma3">3 MA stack 1h (fast&gt;mid&gt;slow)</option>
+          <option value="ma4">4 MA stack 1h (fast&gt;mid&gt;slow&gt;long)</option>
+          <option value="rsi">RSI(14) 1h</option>
+        </select>
       </label>
       <button id="reload" title="Reload catalog">Reload</button>
       <span id="status">Loading…</span>
@@ -148,13 +216,20 @@
       <span class="c-pos-long">Long trade</span>
       <span class="c-short">Short trade</span>
       <span>▲ entry · ● exit · solid = win · dotted = loss</span>
-      <span>SL ladder: onset entry · swing SL → BE@1R → trail · AI flips ignored · exit only on SL</span>
-      <span>ST filter: clip to ST-aligned bars (line starts when ST agrees)</span>
-      <span>exit_arm: delay flatten until SMA14 confirms</span>
+      <span class="c-sl">init SL</span>
+      <span class="c-tp">TP n×R</span>
+      <span>AI thr: none = argmax; else max(P_L,P_S) &lt; thr → FLAT, else LONG/SHORT by P_L vs P_S</span>
+      <span>SL ladder: onset · init SL = pivot distance · at 1R (TP=SL) → SLBE · then ladder · AI ignored in trade</span>
+      <span>entry_arm: AI arms · fill when close confirms vs EMA14 (L: close&gt;EMA / S: close&lt;EMA)</span>
+      <span>R min: skip open when init R &lt; selected % of entry (all exit modes). Swing SL uses chart RollE L (left=right=L).</span>
+      <span>Regime: fixed 1h closed bars — ST(1h) / MA stack(1h) / RSI(14) 1h (no HTF leak)</span>
+      <span>exit_arm (fast MA): adverse close vs EMA Fast 14 OR absolute swing SL</span>
+      <span>exit_arm (mid MA): adverse close vs EMA Mid 48 OR absolute swing SL</span>
+      <span>none: AI flatten OR absolute swing SL (whichever first)</span>
     </div>
     <div id="tradeList"><table>
       <thead><tr>
-        <th>#</th><th>Side</th><th>Entry</th><th>Exit</th><th>Entry px</th><th>Exit px</th><th>PnL</th><th>Cum</th>
+        <th>#</th><th>Side</th><th>Entry</th><th>Exit</th><th>Entry px</th><th>Exit px</th><th>Init R</th><th>R%</th><th>PnL</th><th>Cum</th>
       </tr></thead>
       <tbody id="tradeBody"></tbody>
     </table></div>
@@ -162,6 +237,40 @@
   <script>
     const $ = (id) => document.getElementById(id);
     let catalog = { items: [] };
+    const ALLOWED_ENGINES = ["common", "maribbon"];
+    const ALLOWED_LABEL = "rolle_breakout";
+    const DEFAULT_BALANCE = 10000;
+
+    function catalogItems() {
+      return (catalog.items || []).filter((i) => {
+        const eng = String(i.engine || "").trim().toLowerCase();
+        return ALLOWED_ENGINES.includes(eng) && itemLabel(i) === ALLOWED_LABEL;
+      });
+    }
+
+    function startingBalance(meta) {
+      const b = Number(
+        (meta && (meta.balance ?? meta.starting_balance ?? meta.deposit)) || NaN
+      );
+      return Number.isFinite(b) && b > 0 ? b : DEFAULT_BALANCE;
+    }
+
+    function fmtPct(x) {
+      const n = Number(x) || 0;
+      return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+    }
+
+    function maxDrawdown(equity, startBal) {
+      let peak = startBal;
+      let maxDd = 0;
+      for (const p of equity || []) {
+        const eq = startBal + Number(p.value || 0);
+        if (eq > peak) peak = eq;
+        const dd = peak - eq;
+        if (dd > maxDd) maxDd = dd;
+      }
+      return maxDd;
+    }
     let priceChart, equityChart;
     let candleSeries, maFastSeries, maMidSeries, maSlowSeries, maLongSeries;
     let equitySeries;
@@ -173,6 +282,157 @@
     let probsByTime = new Map();
     let posByTime = new Map();
     let candleByTime = new Map();
+    let viewStart = 0;
+    let viewEnd = 0;
+    let suppressRange = false;
+    let rangeTimer = 0;
+    let cachedView = null;
+    let cachedViewKey = "";
+    let plottedTrades = [];
+
+    function defaultPlotBars(tf) {
+      if (tf === "5m") return 1500;
+      if (tf === "15m") return 2200;
+      if (tf === "1h") return 4000;
+      return 5000;
+    }
+
+    function plotCap() {
+      const el = $("chartBars");
+      const v = el ? el.value : "auto";
+      if (v && v !== "auto") {
+        const n = Number(v);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return defaultPlotBars($("interval") ? $("interval").value : "1h");
+    }
+
+    function sliceByTime(arr, t0, t1) {
+      if (!arr || !arr.length) return [];
+      const out = [];
+      for (const p of arr) {
+        if (p.time >= t0 && p.time <= t1) out.push(p);
+      }
+      return out;
+    }
+
+    function clampWindow() {
+      const candles = (currentData && currentData.candles) || [];
+      const n = candles.length;
+      const cap = plotCap();
+      if (!n) {
+        viewStart = 0;
+        viewEnd = 0;
+        return;
+      }
+      if (viewEnd <= 0 || viewEnd > n) viewEnd = n;
+      if (viewStart < 0) viewStart = 0;
+      if (viewEnd <= viewStart) viewEnd = Math.min(n, viewStart + 2);
+      if (viewEnd - viewStart > cap) viewStart = Math.max(0, viewEnd - cap);
+    }
+
+    function resetWindowToEnd() {
+      const n = ((currentData && currentData.candles) || []).length;
+      viewEnd = n;
+      viewStart = Math.max(0, n - plotCap());
+    }
+
+    function windowMeta() {
+      const candles = (currentData && currentData.candles) || [];
+      const n = candles.length;
+      clampWindow();
+      const i0 = viewStart;
+      const i1 = viewEnd;
+      if (!n || i1 <= i0) return { t0: 0, t1: 0, i0: 0, i1: 0, n: 0, vis: [] };
+      return {
+        t0: candles[i0].time,
+        t1: candles[i1 - 1].time,
+        i0,
+        i1,
+        n,
+        vis: candles.slice(i0, i1),
+      };
+    }
+
+    function getCachedView() {
+      if (!currentData) return null;
+      const swingL = selectedSwingLen(currentData.meta || {});
+      const key = `${exitMode()}|${!!$("entryArm").checked}|${($("rMinPct") && $("rMinPct").value) || "0"}|${($("regimeFilter") && $("regimeFilter").value) || "off"}|sw${swingL}|ai${($("aiThreshold") && $("aiThreshold").value) || "0"}`;
+      if (cachedView && cachedView.data === currentData && cachedViewKey === key) {
+        return cachedView.view;
+      }
+      const view = activeTradesAndEquity(currentData);
+      cachedView = { data: currentData, view };
+      cachedViewKey = key;
+      return view;
+    }
+
+    function shiftWindow(dir) {
+      if (!currentData) return;
+      const cap = plotCap();
+      const n = (currentData.candles || []).length;
+      const step = Math.max(80, Math.floor(cap * 0.65));
+      if (dir < 0) {
+        if (viewStart <= 0) return;
+        viewStart = Math.max(0, viewStart - step);
+        viewEnd = Math.min(n, viewStart + cap);
+      } else {
+        if (viewEnd >= n) return;
+        viewEnd = Math.min(n, viewEnd + step);
+        viewStart = Math.max(0, viewEnd - cap);
+      }
+      paintWindow();
+    }
+
+    function revealTime(fromSec, toSec) {
+      if (!currentData) return;
+      const candles = currentData.candles || [];
+      const n = candles.length;
+      if (!n) return;
+      const cap = plotCap();
+      let i0 = 0;
+      let i1 = n - 1;
+      for (let i = 0; i < n; i++) {
+        if (candles[i].time >= fromSec) { i0 = i; break; }
+      }
+      for (let i = n - 1; i >= 0; i--) {
+        if (candles[i].time <= toSec) { i1 = i; break; }
+      }
+      const mid = Math.floor((i0 + i1) / 2);
+      viewStart = Math.max(0, mid - Math.floor(cap / 2));
+      viewEnd = Math.min(n, viewStart + cap);
+      paintWindow();
+      suppressRange = true;
+      try {
+        priceChart.timeScale().setVisibleRange({ from: fromSec, to: toSec });
+        equityChart.timeScale().setVisibleRange({ from: fromSec, to: toSec });
+      } catch (e) { /* range may be empty */ }
+      requestAnimationFrame(() => { suppressRange = false; });
+    }
+
+    function maybeShiftForRange(range) {
+      if (suppressRange || !currentData || !range) return;
+      const n = (currentData.candles || []).length;
+      const vis = viewEnd - viewStart;
+      if (vis < 10 || n <= vis) return;
+      const span = range.to - range.from;
+      if (span > vis * 0.85) return;
+      const cap = plotCap();
+      const step = Math.max(80, Math.floor(cap * 0.45));
+      if (range.from < 6 && viewStart > 0) {
+        const added = Math.min(step, viewStart);
+        viewStart -= added;
+        if (viewEnd - viewStart > cap) viewEnd = viewStart + cap;
+        paintWindow({ logical: { from: range.from + added, to: range.to + added } });
+        return;
+      }
+      if (range.to > vis - 6 && viewEnd < n) {
+        const added = Math.min(step, n - viewEnd);
+        viewEnd += added;
+        if (viewEnd - viewStart > cap) viewStart = viewEnd - cap;
+        paintWindow({ logical: { from: range.from, to: range.to } });
+      }
+    }
 
     function fmtTime(sec) {
       const d = new Date(sec * 1000);
@@ -263,18 +523,27 @@
     }
 
     function stParams(data) {
-      const L = Math.max(1, Number((data.meta || {}).pivot_len) || 15);
+      const L = Math.max(1, Number((data.meta || {}).rolle_len) || 15);
       return { L, factor: ST_FACTOR };
     }
 
-    function applySupertrend(data) {
-      if (!priceChart) return;
-      clearStSegments();
-      const candles = data.candles || [];
+    function stForData(data) {
       const { L, factor } = stParams(data);
-      const { segs } = computeSupertrend(candles, L, factor);
-      for (const seg of segs) {
-        // Bull → green lower band only; bear → red upper band only.
+      if (data._st && data._st.L === L && data._st.factor === factor) return data._st;
+      data._st = { L, factor, ...computeSupertrend(data.candles || [], L, factor) };
+      return data._st;
+    }
+
+    function applySupertrendWindow(t0, t1) {
+      if (!priceChart || !currentData) return;
+      clearStSegments();
+      const st = stForData(currentData);
+      for (const seg of st.segs) {
+        const pts = [];
+        for (const p of seg.points) {
+          if (p.time >= t0 && p.time <= t1) pts.push(p);
+        }
+        if (pts.length < 2) continue;
         const series = priceChart.addLineSeries({
           color: seg.dir === 1 ? "rgba(0, 230, 118, 0.3)" : "rgba(255, 23, 68, 0.3)",
           lineWidth: 2,
@@ -282,20 +551,291 @@
           lastValueVisible: false,
           crosshairMarkerVisible: false,
         });
-        series.setData(seg.points);
+        series.setData(pts);
         stSegmentSeries.push(series);
       }
       const el = $("legendSt");
-      if (el) el.textContent = `SuperTrend ATR${L}×${factor}`;
+      if (el) el.textContent = `SuperTrend ATR${st.L}×${st.factor}`;
     }
 
     /**
-     * ST-gate held bars (not whole trades).
-     * A short opened while ST was still bull is clipped until ST turns bear;
-     * the remaining segment keeps the open–close line on aligned candles.
+     * ST-gate on fixed 1h closed bars (regime). Chart ST overlay stays on primary TF.
      */
     function filterTradesBySupertrend(trades, candles, length, factor, meta) {
-      const { dirByTime } = computeSupertrend(candles || [], length, factor);
+      const ctx = regime1hContext(currentData || { candles, meta }, candles, length, factor);
+      return filterTradesByBarGate(trades, candles, meta, (want, i) => {
+        const j = ctx.htfIdx[i];
+        if (j < 0) return false;
+        const d = ctx.stDir[j];
+        return (want === 1 && d === 1) || (want === -1 && d === -1);
+      });
+    }
+
+    function maSeriesByTime(data) {
+      const ma = (data && data.ma) || {};
+      const toMap = (arr) => {
+        const m = new Map();
+        for (const p of arr || []) {
+          if (p && p.time != null && Number.isFinite(p.value)) m.set(p.time, p.value);
+        }
+        return m;
+      };
+      return {
+        fast: toMap(ma.fast || ma.ma14),
+        mid: toMap(ma.mid || ma.ma48),
+        slow: toMap(ma.slow),
+        long: toMap(ma.long),
+      };
+    }
+
+    /** Long: fast>mid[>slow[>long]]. Short: reverse. */
+    function maStackAligned(side, fast, mid, slow, longV, depth) {
+      if (!Number.isFinite(fast) || !Number.isFinite(mid)) return false;
+      if (depth >= 3 && !Number.isFinite(slow)) return false;
+      if (depth >= 4 && !Number.isFinite(longV)) return false;
+      if (side > 0) {
+        if (!(fast > mid)) return false;
+        if (depth >= 3 && !(mid > slow)) return false;
+        if (depth >= 4 && !(slow > longV)) return false;
+        return true;
+      }
+      if (!(fast < mid)) return false;
+      if (depth >= 3 && !(mid < slow)) return false;
+      if (depth >= 4 && !(slow < longV)) return false;
+      return true;
+    }
+
+    /** MA stack from closed 1h MAs (EMA14/48/120 + SMA180). */
+    function filterTradesByMaStack(trades, candles, data, depth, meta) {
+      const { L, factor } = stParams(data);
+      const ctx = regime1hContext(data, candles, L, factor);
+      return filterTradesByBarGate(trades, candles, meta, (want, i) => {
+        const j = ctx.htfIdx[i];
+        if (j < 0) return false;
+        return maStackAligned(
+          want,
+          ctx.maFast[j],
+          ctx.maMid[j],
+          ctx.maSlow[j],
+          ctx.maLong[j],
+          depth
+        );
+      });
+    }
+
+    const REGIME_TF = "1h";
+    const REGIME_TF_SEC = 3600;
+    const RSI_LEN = 14;
+    const RSI_LONG_MIN = 60;
+    const RSI_SHORT_MAX = 40;
+    const REGIME_MA_FAST = 14;
+    const REGIME_MA_MID = 48;
+    const REGIME_MA_SLOW = 120;
+    const REGIME_MA_LONG = 180;
+
+    function tfSeconds(iv) {
+      const v = String(iv || "").toLowerCase();
+      if (v === "5m") return 300;
+      if (v === "15m") return 900;
+      if (v === "1h") return 3600;
+      if (v === "4h") return 14400;
+      return 0;
+    }
+
+    function emaSeries(values, length) {
+      const n = values.length;
+      const out = new Array(n).fill(NaN);
+      const len = Math.max(1, length | 0);
+      if (!n) return out;
+      const a = 2 / (len + 1);
+      let ema = values[0];
+      out[0] = ema;
+      for (let i = 1; i < n; i++) {
+        const v = values[i];
+        if (!Number.isFinite(v)) { out[i] = ema; continue; }
+        ema = a * v + (1 - a) * ema;
+        out[i] = ema;
+      }
+      return out;
+    }
+
+    function smaSeries(values, length) {
+      const n = values.length;
+      const out = new Array(n).fill(NaN);
+      const len = Math.max(1, length | 0);
+      let sum = 0;
+      for (let i = 0; i < n; i++) {
+        sum += Number(values[i]) || 0;
+        if (i >= len) sum -= Number(values[i - len]) || 0;
+        if (i >= len - 1) out[i] = sum / len;
+      }
+      return out;
+    }
+
+    /** Wilder RSI; rsi[i] known only after bar i closes. */
+    function wilderRsi(closes, period) {
+      const n = closes.length;
+      const out = new Array(n).fill(NaN);
+      const p = Math.max(1, period | 0);
+      if (n <= p) return out;
+      let avgGain = 0;
+      let avgLoss = 0;
+      for (let i = 1; i <= p; i++) {
+        const d = closes[i] - closes[i - 1];
+        if (d >= 0) avgGain += d;
+        else avgLoss -= d;
+      }
+      avgGain /= p;
+      avgLoss /= p;
+      out[p] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+      for (let i = p + 1; i < n; i++) {
+        const d = closes[i] - closes[i - 1];
+        const g = d > 0 ? d : 0;
+        const l = d < 0 ? -d : 0;
+        avgGain = (avgGain * (p - 1) + g) / p;
+        avgLoss = (avgLoss * (p - 1) + l) / p;
+        out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+      }
+      return out;
+    }
+
+    /**
+     * Aggregate primary → completed 1h OHLC (open-time buckets).
+     * Trailing bucket emitted only if fully covered by primary bars (no partial HTF).
+     */
+    function aggregateCompletedHtfBars(candles, tfSec, primSec) {
+      const out = [];
+      if (!candles || !candles.length || !(tfSec > 0) || !(primSec > 0) || tfSec < primSec) {
+        return out;
+      }
+      let bucket = null;
+      let tOpen = 0;
+      let o = NaN;
+      let h = NaN;
+      let l = NaN;
+      let c = NaN;
+      let lastT = 0;
+      const flush = () => {
+        if (bucket === null || !Number.isFinite(c)) return;
+        // Bucket [tOpen, tOpen+tfSec) complete only if last primary slot is present.
+        if (lastT + primSec >= bucket + tfSec) {
+          out.push({
+            time: tOpen,
+            end: bucket + tfSec,
+            open: o,
+            high: h,
+            low: l,
+            close: c,
+          });
+        }
+      };
+      for (const bar of candles) {
+        const t = Number(bar.time);
+        const b = Math.floor(t / tfSec) * tfSec;
+        if (bucket === null) {
+          bucket = b;
+          tOpen = b;
+          o = Number(bar.open);
+          h = Number(bar.high);
+          l = Number(bar.low);
+          c = Number(bar.close);
+          lastT = t;
+          continue;
+        }
+        if (b !== bucket) {
+          flush();
+          bucket = b;
+          tOpen = b;
+          o = Number(bar.open);
+          h = Number(bar.high);
+          l = Number(bar.low);
+          c = Number(bar.close);
+          lastT = t;
+        } else {
+          h = Math.max(h, Number(bar.high));
+          l = Math.min(l, Number(bar.low));
+          c = Number(bar.close);
+          lastT = t;
+        }
+      }
+      flush();
+      return out;
+    }
+
+    /**
+     * Shared 1h regime context: last completed 1h index per primary bar,
+     * plus ST dir / MAs / RSI on those 1h closes (causal).
+     */
+    function regime1hContext(data, candles, stLen, stFactor) {
+      const n = (candles || []).length;
+      const primaryIv = (data && data.meta && data.meta.interval) || "5m";
+      const primSec = tfSeconds(primaryIv) || 300;
+      const L = Math.max(1, Number(stLen) || 15);
+      const fac = Number(stFactor) || ST_FACTOR;
+      const cacheKey = `${primaryIv}|${n}|${L}|${fac}`;
+      if (data && data._regime1h && data._regime1h.key === cacheKey) return data._regime1h;
+
+      const htfIdx = new Array(n).fill(-1);
+      const empty = {
+        key: cacheKey,
+        htfIdx,
+        stDir: [],
+        maFast: [],
+        maMid: [],
+        maSlow: [],
+        maLong: [],
+        rsi: [],
+      };
+      if (REGIME_TF_SEC < primSec) {
+        if (data) data._regime1h = empty;
+        return empty;
+      }
+
+      const htf = aggregateCompletedHtfBars(candles, REGIME_TF_SEC, primSec);
+      let j = -1;
+      for (let i = 0; i < n; i++) {
+        const tOpen = Number(candles[i].time);
+        while (j + 1 < htf.length && htf[j + 1].end <= tOpen) j += 1;
+        htfIdx[i] = j;
+      }
+
+      const st = computeSupertrend(htf, L, fac);
+      const stDir = htf.map((b) => st.dirByTime.get(b.time) || 0);
+      const closes = htf.map((b) => b.close);
+      const ctx = {
+        key: cacheKey,
+        htfIdx,
+        stDir,
+        maFast: emaSeries(closes, REGIME_MA_FAST),
+        maMid: emaSeries(closes, REGIME_MA_MID),
+        maSlow: emaSeries(closes, REGIME_MA_SLOW),
+        maLong: smaSeries(closes, REGIME_MA_LONG),
+        rsi: wilderRsi(closes, RSI_LEN),
+      };
+      if (data) data._regime1h = ctx;
+      return ctx;
+    }
+
+    function rsiSideOk(want, rsi) {
+      if (!Number.isFinite(rsi)) return false;
+      if (rsi > RSI_LONG_MIN) return want === 1;
+      if (rsi < RSI_SHORT_MAX) return want === -1;
+      return false;
+    }
+
+    /** RSI(14) on closed 1h bars. */
+    function filterTradesByRsi(trades, candles, data, meta) {
+      const { L, factor } = stParams(data);
+      const ctx = regime1hContext(data, candles, L, factor);
+      return filterTradesByBarGate(trades, candles, meta, (want, i) => {
+        const j = ctx.htfIdx[i];
+        if (j < 0) return false;
+        return rsiSideOk(want, ctx.rsi[j]);
+      });
+    }
+
+    /** Shared clip-to-aligned-bars logic (ST / MA stack / RSI). */
+    function filterTradesByBarGate(trades, candles, meta, barOk) {
       const bars = candles || [];
       const idxByTime = new Map(bars.map((c, i) => [c.time, i]));
       const lot = Number((meta || {}).lot) || 0.1;
@@ -331,14 +871,11 @@
             exitPrice: exitPx,
             pnl,
             pnlCum: cum,
-            stDir: want === 1 ? "bull" : "bear",
           });
           runStart = -1;
         };
         for (let i = i0; i < end; i++) {
-          const d = dirByTime.get(bars[i].time);
-          const ok = (want === 1 && d === 1) || (want === -1 && d === -1);
-          if (ok) {
+          if (barOk(want, i, bars)) {
             if (runStart < 0) runStart = i;
           } else {
             flush(i);
@@ -348,15 +885,58 @@
       }
       return kept;
     }
+
+    function selectedRegimeFilter() {
+      const v = ($("regimeFilter") && $("regimeFilter").value) || "off";
+      if (v === "st" || v === "ma2" || v === "ma3" || v === "ma4" || v === "rsi" || v === "rsi_1h") {
+        return v === "rsi_1h" ? "rsi" : v;
+      }
+      return "off";
+    }
+
+    function regimeFilterLabel(mode) {
+      if (mode === "st") return "ST (1h)";
+      if (mode === "ma2") return "2 MA stack 1h";
+      if (mode === "ma3") return "3 MA stack 1h";
+      if (mode === "ma4") return "4 MA stack 1h";
+      if (mode === "rsi" || mode === "rsi_1h") return "RSI(14) 1h";
+      return "off";
+    }
     function fmtPnl(x) {
       const s = (x >= 0 ? "+" : "") + x.toFixed(2);
       return s;
     }
 
-    // EA defaults: swing pivot L/R=9, ladder max 20R, BE offset 0.08R.
-    const SL_SWING_LEN = 9;
+    // EA default swing pivot L/R=9; chart uses selected RollE L (fallback 9).
+    const SL_SWING_LEN_DEFAULT = 9;
     const SL_LADDER_MAX_R = 20;
     const SL_BE_OFFSET_R = 0.08;
+    const SL_TP_DRAW_MAX = 8; // max TP n×R lines per trade
+
+    /** Swing L/R for init SL / R — chart RollE L dropdown, else meta.rolle_len, else 9. */
+    function selectedSwingLen(meta) {
+      const raw = ($("rolleLen") && $("rolleLen").value) || "";
+      let n = Number(raw);
+      if (!(Number.isFinite(n) && n > 0) && meta) {
+        const raw = meta.rolle_len != null ? meta.rolle_len : meta.pivot_len;
+        if (raw != null) n = Number(raw);
+      }
+      if (!(Number.isFinite(n) && n > 0)) n = SL_SWING_LEN_DEFAULT;
+      return Math.max(1, Math.floor(n));
+    }
+
+    function selectedRMinPct() {
+      const el = $("rMinPct");
+      if (!el) return 0;
+      const v = Number(el.value);
+      return Number.isFinite(v) && v > 0 ? v : 0;
+    }
+
+    function fmtRMinPct(pct) {
+      if (!(pct > 0)) return "off";
+      const p = pct * 100;
+      return (Math.abs(p - Math.round(p)) < 1e-9 ? p.toFixed(0) : p.toFixed(1)) + "%";
+    }
 
     function pivotExtrema(values, left, right, wantHigh) {
       const n = values.length;
@@ -396,19 +976,54 @@
       return { sh: valueWhen(ph), sl: valueWhen(pl) };
     }
 
-    /** Geometry-only swing stop (no chase / ATR / pct R validation). */
-    function makeSwingStopNoValidate(side, entry, swingHigh, swingLow) {
+    /**
+     * Swing stop. When rMinPct>0, skip if init R < entry*rMinPct
+     * (chart R-min gate). Chase/ATR caps remain off (geometry + optional pct floor).
+     */
+    function makeSwingStop(side, entry, swingHigh, swingLow, rMinPct) {
       if (!side || !Number.isFinite(entry)) return null;
       if (!Number.isFinite(swingHigh) || !Number.isFinite(swingLow)) return null;
+      let sl;
+      let r;
       if (side > 0) {
         if (!(swingLow < entry)) return null;
-        return { sl: swingLow, r: entry - swingLow };
+        sl = swingLow;
+        r = entry - swingLow;
+      } else {
+        if (!(swingHigh > entry)) return null;
+        sl = swingHigh;
+        r = swingHigh - entry;
       }
-      if (!(swingHigh > entry)) return null;
-      return { sl: swingHigh, r: swingHigh - entry };
+      if (!(r > 0)) return null;
+      if (rMinPct > 0 && r < entry * rMinPct) return null;
+      return { sl, r };
+    }
+
+    function makeSwingStopNoValidate(side, entry, swingHigh, swingLow) {
+      return makeSwingStop(side, entry, swingHigh, swingLow, 0);
+    }
+
+    function emaByTimeMap(data, which) {
+      const ma = data && data.ma;
+      const series = which === "mid"
+        ? ((ma && (ma.mid || ma.ma48)) || [])
+        : ((ma && (ma.fast || ma.ma14)) || []);
+      const emaByT = new Map();
+      for (const p of series) {
+        if (p && p.time != null && Number.isFinite(p.value)) emaByT.set(p.time, p.value);
+      }
+      return emaByT;
+    }
+
+    /** Long: close > EMA; short: close < EMA. */
+    function emaEntryConfirm(side, close, ema) {
+      if (!Number.isFinite(ema)) return false;
+      return side > 0 ? close > ema : close < ema;
     }
 
     function updateSlLadder(side, entry, r, rung, stop, fav) {
+      // k = floor(favorable / initial_R). k>=1 means price traveled TP=SL (1R).
+      // 1R → SLBE (entry ± 0.08R); 2R+ → lock (k-1)R.
       if (!(r > 0) || !(fav > 0)) return { rung, stop };
       let k = Math.floor(fav / r);
       if (k > SL_LADDER_MAX_R) k = SL_LADDER_MAX_R;
@@ -425,26 +1040,281 @@
       return { rung: want, stop: target };
     }
 
+    function selectedAiThreshold() {
+      const el = $("aiThreshold");
+      if (!el) return 0;
+      const v = Number(el.value);
+      return Number.isFinite(v) && v > 0 ? v : 0;
+    }
+
+    function fmtAiThr(thr) {
+      if (!(thr > 0)) return "none";
+      const p = thr * 100;
+      return (Math.abs(p - Math.round(p)) < 1e-9 ? p.toFixed(0) : p.toFixed(1)) + "%";
+    }
+
     /**
-     * AI onset entry + swing SL + SLBE + SL ladder.
-     * While in a trade, raw AI flips/FLAT are ignored — exit only on SL.
-     * Re-entry needs a fresh AI onset after exit (stale flip during hold is ignored).
+     * EA / export parity (_classes_from_probs):
+     * thr<=0 → argmax(FLAT,LONG,SHORT);
+     * thr>0  → max(P_L,P_S)<thr → FLAT else LONG if P_L>=P_S else SHORT.
+     * Returns +1 / -1 / 0, or null if probs missing.
      */
-    function simulateSlLadderTrades(candles, meta) {
-      const n = candles.length;
-      if (n < SL_SWING_LEN * 2 + 2) return [];
-      const highs = candles.map((c) => c.high);
-      const lows = candles.map((c) => c.low);
-      const { sh, sl } = swingLevels(highs, lows, SL_SWING_LEN);
+    function sigFromProbs(pr, thr) {
+      if (!pr) return null;
+      const pF = Number(pr.FLAT) || 0;
+      const pL = Number(pr.LONG) || 0;
+      const pS = Number(pr.SHORT) || 0;
+      const t = Number(thr) || 0;
+      if (!(t > 0)) {
+        // argmax([FLAT, LONG, SHORT]) — ties prefer FLAT then LONG (numpy first-max)
+        if (pF >= pL && pF >= pS) return 0;
+        if (pL >= pS) return 1;
+        return -1;
+      }
+      if (Math.max(pL, pS) < t) return 0;
+      return pL >= pS ? 1 : -1;
+    }
+
+    function sigLabel(side) {
+      if (side > 0) return "LONG";
+      if (side < 0) return "SHORT";
+      return "FLAT";
+    }
+
+    function sigOfCandle(c) {
+      const thr = selectedAiThreshold();
+      const fromP = sigFromProbs(pickProbs(c), thr);
+      if (fromP != null) return fromP;
+      const s = String((c && c.signal) || "").toUpperCase();
+      if (s === "LONG" || s === "1") return 1;
+      if (s === "SHORT" || s === "2") return -1;
+      return 0;
+    }
+
+    function tradesFromPositions(candles, pos, meta) {
       const lot = Number(meta.lot) || 0.1;
       const pv = Number(meta.point_value) || 1;
       const scale = lot * pv;
-      const sigOf = (c) => {
-        const s = String(c.signal || "").toUpperCase();
-        if (s === "LONG" || s === "1") return 1;
-        if (s === "SHORT" || s === "2") return -1;
-        return 0;
+      const trades = [];
+      let side = 0;
+      let entryI = -1;
+      let cum = 0;
+      const n = candles.length;
+      const closeAt = (i) => {
+        if (side === 0 || entryI < 0 || i <= entryI) {
+          entryI = -1;
+          return;
+        }
+        const entryPx = candles[entryI].open;
+        const exitPx = candles[i].open;
+        const pnl = side * (exitPx - entryPx) * scale;
+        cum += pnl;
+        trades.push({
+          side: side > 0 ? "long" : "short",
+          entryTime: candles[entryI].time,
+          exitTime: candles[i].time,
+          entryPrice: entryPx,
+          exitPrice: exitPx,
+          pnl,
+          pnlCum: cum,
+        });
+        entryI = -1;
       };
+      for (let i = 0; i < n; i++) {
+        const p = pos[i] || 0;
+        if (p === side) continue;
+        if (side !== 0) closeAt(i);
+        side = p;
+        entryI = p !== 0 ? i : -1;
+      }
+      if (side !== 0 && entryI >= 0) closeAt(n - 1);
+      return trades;
+    }
+
+    /**
+     * raw_ai + optional entry_arm (fast MA) / exit_arm (fast or mid MA), plus absolute swing SL.
+     * Entry requires a valid swing stop; rMinPct>0 skips when init R < entry*rMinPct.
+     * Exits: swing SL hit (absolute) OR AI flatten (exit_arm waits for MA confirm).
+     * exitMa: "fast" (EMA14) | "mid" (EMA48).
+     */
+    function simulateArmTrades(candles, data, meta, { entryArm, exitArm, exitMa, rMinPct, swingLen }) {
+      const n = candles.length;
+      const L = Math.max(1, Math.floor(Number(swingLen) || selectedSwingLen(meta)));
+      if (n < L * 2 + 2) return [];
+      const rGate = rMinPct != null ? Number(rMinPct) : 0;
+      const exitMaKind = exitMa === "mid" ? "mid" : "fast";
+      const entryEmaByT = entryArm ? emaByTimeMap(data, "fast") : null;
+      const exitEmaByT = exitArm ? emaByTimeMap(data, exitMaKind) : null;
+      const highs = candles.map((c) => c.high);
+      const lows = candles.map((c) => c.low);
+      const { sh, sl } = swingLevels(highs, lows, L);
+      const lot = Number(meta.lot) || 0.1;
+      const pv = Number(meta.point_value) || 1;
+      const scale = lot * pv;
+
+      const trades = [];
+      let have = 0;
+      let stop = NaN;
+      let entryPx = 0;
+      let entryT = 0;
+      let entryI = -1;
+      let r = 0;
+      let cum = 0;
+      let armed = 0;
+      let initSl = NaN;
+      let maxFav = 0;
+
+      const tryOpen = (side, i) => {
+        if (i + 1 >= n) return false;
+        const entry = candles[i + 1].open;
+        const sw = makeSwingStop(side, entry, sh[i], sl[i], rGate);
+        if (!sw) return false;
+        have = side;
+        stop = sw.sl;
+        initSl = sw.sl;
+        maxFav = 0;
+        r = sw.r;
+        entryPx = entry;
+        entryT = candles[i + 1].time;
+        entryI = i + 1;
+        armed = 0;
+        return true;
+      };
+
+      const closeTrade = (exitT, exitPx, reason) => {
+        if (have === 0 || entryI < 0) return;
+        const pnl = have * (exitPx - entryPx) * scale;
+        cum += pnl;
+        const rr = r > 0 ? r : Math.abs(entryPx - initSl);
+        const nTp = rr > 0
+          ? Math.max(1, Math.min(SL_TP_DRAW_MAX, Math.floor(maxFav / rr) + 1))
+          : 1;
+        const tps = [];
+        if (rr > 0) {
+          for (let k = 1; k <= nTp; k++) tps.push(entryPx + have * k * rr);
+        }
+        trades.push({
+          side: have > 0 ? "long" : "short",
+          entryTime: entryT,
+          exitTime: exitT,
+          entryPrice: entryPx,
+          exitPrice: exitPx,
+          pnl,
+          pnlCum: cum,
+          exitReason: reason || "ai",
+          initSl,
+          r: rr,
+          tps,
+        });
+        have = 0;
+        stop = NaN;
+        r = 0;
+        entryI = -1;
+        initSl = NaN;
+        maxFav = 0;
+        armed = 0;
+      };
+
+      for (let i = 0; i < n - 1; i++) {
+        const ai = sigOfCandle(candles[i]);
+        const mEntry = entryEmaByT ? entryEmaByT.get(candles[i].time) : NaN;
+        const mExit = exitEmaByT ? exitEmaByT.get(candles[i].time) : NaN;
+
+        if (have !== 0) {
+          if (Number.isFinite(stop)) {
+            const fav =
+              have > 0
+                ? candles[i].high - entryPx
+                : entryPx - candles[i].low;
+            if (fav > maxFav) maxFav = fav;
+            let hit = false;
+            if (have > 0 && candles[i].low <= stop) hit = true;
+            else if (have < 0 && candles[i].high >= stop) hit = true;
+            if (hit) {
+              const exitI = i + 1 < n ? i + 1 : i;
+              closeTrade(candles[exitI].time, stop, "sl");
+            }
+          }
+        }
+
+        if (have !== 0) {
+          // Still in trade: AI / exit_arm flatten (absolute SL already checked).
+          if (ai === have) continue;
+          if (exitArm) {
+            if (!Number.isFinite(mExit)) continue;
+            if (!(have > 0 ? candles[i].close < mExit : candles[i].close > mExit)) continue;
+            closeTrade(
+              candles[i + 1].time,
+              candles[i + 1].open,
+              exitMaKind === "mid" ? "exit_arm_mid" : "exit_arm_fast"
+            );
+          } else {
+            closeTrade(candles[i + 1].time, candles[i + 1].open, "ai");
+          }
+          // Fall through so a new AI side can open on the same decision bar.
+        }
+
+        // Flat: entry (entry_arm always uses fast MA)
+        if (entryArm && !Number.isFinite(mEntry)) continue;
+
+        if (entryArm) {
+          const c = candles[i].close;
+          if (armed !== 0) {
+            if (emaEntryConfirm(armed, c, mEntry)) {
+              tryOpen(armed, i);
+            } else if (ai === 0) {
+              armed = 0;
+            } else if (ai !== armed) {
+              armed = ai;
+              if (emaEntryConfirm(armed, c, mEntry)) tryOpen(armed, i);
+            }
+          }
+          if (have === 0) {
+            if (ai === 0) armed = 0;
+            else {
+              if (armed !== ai) armed = ai;
+              if (emaEntryConfirm(armed, c, mEntry)) tryOpen(armed, i);
+            }
+          }
+        } else if (ai !== 0) {
+          tryOpen(ai, i);
+        }
+      }
+      if (have !== 0 && entryI >= 0) {
+        closeTrade(candles[n - 1].time, candles[n - 1].open, "eod");
+      }
+      return trades;
+    }
+
+    /** exit_arm only (entry immediate) — kept as thin wrapper. */
+    function simulateExitArmTrades(candles, data, meta, rMinPct, exitMa) {
+      return simulateArmTrades(candles, data, meta, {
+        entryArm: false,
+        exitArm: true,
+        exitMa: exitMa || "fast",
+        rMinPct: rMinPct || 0,
+      });
+    }
+
+    /**
+     * AI onset (+ optional entry_arm EMA14) + swing-pivot initial SL + SLBE at 1R + ladder.
+     * While in a trade, raw AI flips/FLAT are ignored — exit only on SL.
+     * Re-entry needs a fresh AI onset after exit (stale flip during hold is ignored).
+     * rMinPct>0 skips open when init R < entry*rMinPct.
+     */
+    function simulateSlLadderTrades(candles, meta, opts) {
+      const n = candles.length;
+      const L = Math.max(1, Math.floor(Number(opts && opts.swingLen) || selectedSwingLen(meta)));
+      if (n < L * 2 + 2) return [];
+      const entryArm = !!(opts && opts.entryArm);
+      const rMinPct = (opts && opts.rMinPct != null) ? Number(opts.rMinPct) : 0;
+      const emaByT = entryArm ? emaByTimeMap(opts && opts.data) : null;
+      const highs = candles.map((c) => c.high);
+      const lows = candles.map((c) => c.low);
+      const { sh, sl } = swingLevels(highs, lows, L);
+      const lot = Number(meta.lot) || 0.1;
+      const pv = Number(meta.point_value) || 1;
+      const scale = lot * pv;
 
       const trades = [];
       let have = 0;
@@ -456,11 +1326,39 @@
       let rung = 0;
       let cum = 0;
       let prevAi = 0; // tracks AI for onset; updated even while in trade
+      let armed = 0; // entry_arm pending side
+      let initSl = NaN;
+      let maxFav = 0;
+
+      const tryOpen = (side, i) => {
+        const entry = candles[i + 1].open;
+        const sw = makeSwingStop(side, entry, sh[i], sl[i], rMinPct);
+        if (!sw) return false;
+        have = side;
+        stop = sw.sl;
+        initSl = sw.sl;
+        maxFav = 0;
+        r = sw.r;
+        rung = 0;
+        entryPx = entry;
+        entryT = candles[i + 1].time;
+        entryI = i + 1;
+        armed = 0;
+        return true;
+      };
 
       const closeTrade = (exitT, exitPx, reason) => {
         if (have === 0 || entryI < 0) return;
         const pnl = have * (exitPx - entryPx) * scale;
         cum += pnl;
+        const rr = r > 0 ? r : Math.abs(entryPx - initSl);
+        const nTp = rr > 0
+          ? Math.max(1, Math.min(SL_TP_DRAW_MAX, Math.floor(maxFav / rr) + 1))
+          : 1;
+        const tps = [];
+        if (rr > 0) {
+          for (let n = 1; n <= nTp; n++) tps.push(entryPx + have * n * rr);
+        }
         trades.push({
           side: have > 0 ? "long" : "short",
           entryTime: entryT,
@@ -470,16 +1368,21 @@
           pnl,
           pnlCum: cum,
           exitReason: reason || "sl",
+          initSl,
+          r: rr,
+          tps,
         });
         have = 0;
         stop = NaN;
         r = 0;
         rung = 0;
         entryI = -1;
+        initSl = NaN;
+        maxFav = 0;
       };
 
       for (let i = 0; i < n - 1; i++) {
-        const ai = sigOf(candles[i]);
+        const ai = sigOfCandle(candles[i]);
 
         if (have !== 0) {
           // In trade: ignore raw AI flip / FLAT — only manage SL ladder.
@@ -488,6 +1391,7 @@
               have > 0
                 ? candles[i].high - entryPx
                 : entryPx - candles[i].low;
+            if (fav > maxFav) maxFav = fav;
             const up = updateSlLadder(have, entryPx, r, rung, stop, fav);
             rung = up.rung;
             stop = up.stop;
@@ -495,9 +1399,27 @@
             let exitPx = stop;
             if (have > 0 && candles[i].low <= stop) hit = true;
             else if (have < 0 && candles[i].high >= stop) hit = true;
-            if (hit) closeTrade(candles[i].time, exitPx, "sl");
+            if (hit) {
+              // EA SyncSlLadder HITs on the next bar open after the touch bar.
+              const exitI = i + 1 < n ? i + 1 : i;
+              closeTrade(candles[exitI].time, exitPx, "sl");
+            }
           }
           prevAi = ai;
+          continue;
+        }
+
+        if (entryArm) {
+          // Flat + entry_arm: arm on AI onset; fill when EMA confirms.
+          const onset = ai !== 0 && ai !== prevAi;
+          prevAi = ai;
+          if (onset) armed = ai;
+          if (ai === 0) armed = 0;
+          else if (armed !== 0 && ai !== armed) armed = ai;
+          if (armed === 0) continue;
+          const m = emaByT.get(candles[i].time);
+          if (!emaEntryConfirm(armed, candles[i].close, m)) continue;
+          tryOpen(armed, i);
           continue;
         }
 
@@ -505,16 +1427,7 @@
         const onset = ai !== 0 && ai !== prevAi;
         prevAi = ai;
         if (!onset) continue;
-        const entry = candles[i + 1].open;
-        const sw = makeSwingStopNoValidate(ai, entry, sh[i], sl[i]);
-        if (!sw) continue;
-        have = ai;
-        stop = sw.sl;
-        r = sw.r;
-        rung = 0;
-        entryPx = entry;
-        entryT = candles[i + 1].time;
-        entryI = i + 1;
+        tryOpen(ai, i);
       }
       if (have !== 0 && entryI >= 0) {
         closeTrade(candles[n - 1].time, candles[n - 1].open, "eod");
@@ -536,31 +1449,76 @@
       });
     }
 
+    function exitMode() {
+      const v = ($("exitMode") && $("exitMode").value) || "none";
+      if (v === "sl_ladder") return "sl_ladder";
+      if (v === "exit_arm_mid") return "exit_arm_mid";
+      if (v === "exit_arm_fast" || v === "exit_arm") return "exit_arm_fast";
+      return "none";
+    }
+
+    function exitArmMaKind(mode) {
+      if (mode === "exit_arm_mid") return "mid";
+      if (mode === "exit_arm_fast") return "fast";
+      return null;
+    }
+
     function activeTradesAndEquity(data) {
-      const useExit = $("exitArm").checked && Array.isArray(data.tradesExitArm);
-      const useSl = $("slLadder").checked;
-      const useSt = $("stFilter").checked;
-      let trades = useSl
-        ? simulateSlLadderTrades(data.candles || [], data.meta || {})
-        : useExit
-          ? (data.tradesExitArm || [])
-          : (data.trades || []);
-      const rawCount = trades.length;
-      if (useSt) {
-        const { L, factor } = stParams(data);
-        trades = filterTradesBySupertrend(trades, data.candles, L, factor, data.meta || {});
+      const mode = exitMode();
+      const useSl = mode === "sl_ladder";
+      const exitMa = exitArmMaKind(mode);
+      const useExit = exitMa != null;
+      const useEntryArm = !!($("entryArm") && $("entryArm").checked);
+      const rMinPct = selectedRMinPct();
+      const regime = selectedRegimeFilter();
+      const candles = data.candles || [];
+      const meta = data.meta || {};
+      const swingLen = selectedSwingLen(meta);
+      const aiThr = selectedAiThreshold();
+      let trades;
+      if (useSl) {
+        trades = simulateSlLadderTrades(candles, meta, {
+          entryArm: useEntryArm,
+          rMinPct,
+          swingLen,
+          data,
+        });
+      } else {
+        // none / exit_arm: AI (or exit_arm MA) exits + absolute swing SL + R-min gate
+        trades = simulateArmTrades(candles, data, meta, {
+          entryArm: useEntryArm,
+          exitArm: useExit,
+          exitMa: exitMa || "fast",
+          rMinPct,
+          swingLen,
+        });
       }
-      const rebuilt = useSl || useSt;
+      const rawCount = trades.length;
+      if (regime === "st") {
+        const { L, factor } = stParams(data);
+        trades = filterTradesBySupertrend(trades, candles, L, factor, meta);
+      } else if (regime === "ma2") {
+        trades = filterTradesByMaStack(trades, candles, data, 2, meta);
+      } else if (regime === "ma3") {
+        trades = filterTradesByMaStack(trades, candles, data, 3, meta);
+      } else if (regime === "ma4") {
+        trades = filterTradesByMaStack(trades, candles, data, 4, meta);
+      } else if (regime === "rsi") {
+        trades = filterTradesByRsi(trades, candles, data, meta);
+      }
       return {
         trades,
-        equity: rebuilt
-          ? equityFromTrades(data.candles, trades)
-          : (useExit
-              ? (data.equityExitArm || equityFromTrades(data.candles, trades))
-              : (data.equity || equityFromTrades(data.candles, trades))),
+        equity: equityFromTrades(candles, trades),
         slLadder: useSl,
-        exitArm: useExit && !useSl,
-        stFilter: useSt,
+        exitArm: useExit,
+        exitMa: useExit ? exitMa : null,
+        entryArm: useEntryArm,
+        swingSl: true,
+        swingLen,
+        rMinPct,
+        aiThreshold: aiThr,
+        regimeFilter: regime,
+        stFilter: regime === "st",
         rawCount,
       };
     }
@@ -572,28 +1530,83 @@
       });
     }
 
+    const TF_ORDER = ["5m", "15m", "1h", "4h"];
+
     function itemLabel(i) {
-      return String(i.label_mode || i.labelMode || "unknown").trim().toLowerCase();
+      let m = String(i.label_mode || i.labelMode || "unknown").trim().toLowerCase();
+      if (m === "pivot_breakout") m = "rolle_breakout"; // legacy alias
+      return m;
+    }
+
+    function itemInterval(i) {
+      const raw = String(i.interval || "").trim().toLowerCase();
+      if (raw === "5m" || raw === "15m" || raw === "1h" || raw === "4h") return raw;
+      // Legacy stems without interval tag are 1h exports.
+      const id = String(i.id || i.file || "");
+      if (/_(5m|15m|1h|4h)_\d+d$/.test(id)) return id.match(/_(5m|15m|1h|4h)_\d+d$/)[1];
+      return "1h";
+    }
+
+    function itemRolleLen(i) {
+      if (i == null) return null;
+      const rawLen = i.rolle_len != null && i.rolle_len !== "" ? i.rolle_len : i.pivot_len;
+      if (rawLen != null && rawLen !== "") {
+        const n = Number(rawLen);
+        return Number.isFinite(n) ? n : null;
+      }
+      const id = String(i.id || i.file || "");
+      const m = id.match(/_rolle_breakout_p(\d+)_/) || id.match(/_p(\d+)_(?:5m|15m|1h|4h)_\d+d/);
+      return m ? Number(m[1]) : null;
+    }
+
+    function itemBackbone(i) {
+      const raw = String((i && i.backbone) || "").trim();
+      if (raw) return raw;
+      const id = String((i && (i.id || i.file)) || "");
+      if (/_v2_(?:5m|15m|1h|4h)_\d+d/.test(id)) return "smartBSEntryV2";
+      if (/_tf_(?:5m|15m|1h|4h)_\d+d/.test(id)) return "smartBSTF";
+      if (/_tcn_(?:5m|15m|1h|4h)_\d+d/.test(id)) return "tcn";
+      return "tcn";
     }
 
     function fillSelects() {
-      const items = catalog.items || [];
+      const items = catalogItems();
+      const iv = $("interval").value;
       const sym = $("symbol").value;
       const lab = $("labelMode").value;
+      const plen = $("rolleLen").value;
       const eng = $("engine").value;
+      const bb = $("backbone").value;
       const days = $("days").value;
 
-      const symbols = unique(items, "symbol");
+      const availableTf = new Set(items.map(itemInterval));
+      $("interval").innerHTML = TF_ORDER.map((t) => {
+        const n = items.filter((i) => itemInterval(i) === t).length;
+        const dis = n ? "" : " disabled";
+        return `<option value="${t}"${dis}>${t}${n ? ` (${n})` : ""}</option>`;
+      }).join("");
+      if (availableTf.has(iv)) $("interval").value = iv;
+      else if (availableTf.has("1h")) $("interval").value = "1h";
+      else if (availableTf.has("15m")) $("interval").value = "15m";
+      else if (availableTf.has("5m")) $("interval").value = "5m";
+      else if (TF_ORDER.find((t) => availableTf.has(t))) {
+        $("interval").value = TF_ORDER.find((t) => availableTf.has(t));
+      }
+
+      const ivNow = $("interval").value;
+      const atTf = items.filter((i) => itemInterval(i) === ivNow);
+
+      const symbols = unique(atTf, "symbol");
       $("symbol").innerHTML = symbols.map((s) => `<option value="${s}">${s}</option>`).join("");
       if (symbols.includes(sym)) $("symbol").value = sym;
       else if (symbols.includes("XAUUSD")) $("symbol").value = "XAUUSD";
+      else if (symbols.length) $("symbol").value = symbols[0];
 
       const symNow = $("symbol").value;
-      const labels = [...new Set(
-        items.filter((i) => i.symbol === symNow).map(itemLabel)
-      )].sort((a, b) => a.localeCompare(b));
+      const atSym = atTf.filter((i) => i.symbol === symNow);
+      const labels = [...new Set(atSym.map(itemLabel))].sort((a, b) => a.localeCompare(b));
       const labelCounts = {};
-      for (const i of items.filter((x) => x.symbol === symNow)) {
+      for (const i of atSym) {
         const k = itemLabel(i);
         labelCounts[k] = (labelCounts[k] || 0) + 1;
       }
@@ -602,69 +1615,159 @@
         return `<option value="${l}">${l} (${n})</option>`;
       }).join("");
       if (labels.includes(lab)) $("labelMode").value = lab;
-      else if (labels.includes("pivot_breakout")) $("labelMode").value = "pivot_breakout";
+      else if (labels.includes("rolle_breakout")) $("labelMode").value = "rolle_breakout";
       else if (labels.length) $("labelMode").value = labels[0];
 
       const labNow = $("labelMode").value;
-      const engines = unique(
-        items.filter((i) => i.symbol === symNow && itemLabel(i) === labNow),
-        "engine"
-      );
+      const atLab = atSym.filter((i) => itemLabel(i) === labNow);
+      const rolleLens = [
+        ...new Set(atLab.map(itemRolleLen).filter((x) => x != null)),
+      ].sort((a, b) => a - b);
+      const pivotWrap = $("rolleLen").closest("label");
+      if (rolleLens.length) {
+        if (pivotWrap) pivotWrap.style.display = "";
+        $("rolleLen").innerHTML = rolleLens
+          .map((L) => {
+            const n = atLab.filter((i) => itemRolleLen(i) === L).length;
+            return `<option value="${L}">${L}${n ? ` (${n})` : ""}</option>`;
+          })
+          .join("");
+        if (rolleLens.map(String).includes(String(plen))) $("rolleLen").value = String(plen);
+        else if (ivNow === "1h") {
+          // Default pack: XAU maribbon 1h rolle_breakout L=5.
+          const pref1h = [5, 9, 12, 15, 24, 36];
+          const hit = pref1h.find((L) => rolleLens.includes(L));
+          $("rolleLen").value = hit != null ? String(hit) : String(rolleLens[0]);
+        } else if (ivNow === "15m") {
+          const pref15 = [5, 9, 12, 15];
+          const hit = pref15.find((L) => rolleLens.includes(L));
+          $("rolleLen").value = hit != null ? String(hit) : String(rolleLens[0]);
+        } else if (rolleLens.includes(5)) $("rolleLen").value = "5";
+        else if (rolleLens.includes(15)) $("rolleLen").value = "15";
+        else $("rolleLen").value = String(rolleLens[0]);
+      } else {
+        $("rolleLen").innerHTML = `<option value="">—</option>`;
+        $("rolleLen").value = "";
+        if (pivotWrap) pivotWrap.style.display = "none";
+      }
+
+      const plenNow = $("rolleLen").value;
+      const atPlen = atLab.filter((i) => {
+        if (!plenNow) return itemRolleLen(i) == null;
+        return itemRolleLen(i) === Number(plenNow);
+      });
+      // If catalog items lack rolle_len but label is rolle_breakout, fall back to all atLab.
+      const engPool = atPlen.length ? atPlen : atLab;
+      const engines = unique(engPool, "engine");
       $("engine").innerHTML = engines.map((e) => `<option value="${e}">${e}</option>`).join("");
       if (engines.includes(eng)) $("engine").value = eng;
       else if (engines.includes("maribbon")) $("engine").value = "maribbon";
+      else if (engines.includes("common")) $("engine").value = "common";
+      else if (engines.length) $("engine").value = engines[0];
 
       const engNow = $("engine").value;
-      const dayOpts = unique(
-        items.filter(
-          (i) => i.symbol === symNow && itemLabel(i) === labNow && i.engine === engNow
-        ),
-        "days"
+      const atEng = engPool.filter((i) => i.engine === engNow);
+      const backbones = [...new Set(atEng.map(itemBackbone))].sort((a, b) =>
+        String(a).localeCompare(String(b))
       );
+      $("backbone").innerHTML = backbones.map((b) => `<option value="${b}">${b}</option>`).join("");
+      if (backbones.includes(bb)) $("backbone").value = bb;
+      else if (backbones.includes("smartBSEntryV2")) $("backbone").value = "smartBSEntryV2";
+      else if (backbones.includes("tcn")) $("backbone").value = "tcn";
+      else if (backbones.length) $("backbone").value = backbones[0];
+
+      const bbNow = $("backbone").value;
+      const atBb = atEng.filter((i) => itemBackbone(i) === bbNow);
+      const dayOpts = unique(atBb.length ? atBb : atEng, "days");
       $("days").innerHTML = dayOpts.map((d) => `<option value="${d}">${d}d</option>`).join("");
       if (dayOpts.map(String).includes(String(days))) $("days").value = days;
       else if (dayOpts.includes(360)) $("days").value = "360";
+      else if (dayOpts.length) $("days").value = String(dayOpts[dayOpts.length - 1]);
     }
 
     function currentItem() {
+      const iv = $("interval").value;
       const s = $("symbol").value;
       const lm = $("labelMode").value;
+      const plenRaw = $("rolleLen").value;
+      const plen = plenRaw === "" ? null : Number(plenRaw);
       const e = $("engine").value;
+      const bb = $("backbone").value;
       const d = Number($("days").value);
-      return (catalog.items || []).find(
+      let matches = catalogItems().filter(
         (i) =>
+          itemInterval(i) === iv &&
           i.symbol === s &&
           itemLabel(i) === lm &&
           i.engine === e &&
           Number(i.days) === d
       );
+      if (!matches.length) return null;
+      if (plen != null && Number.isFinite(plen)) {
+        const byPlen = matches.filter((i) => itemRolleLen(i) === plen);
+        if (byPlen.length) matches = byPlen;
+      }
+      const byBb = matches.filter((i) => itemBackbone(i) === bb);
+      if (byBb.length) matches = byBb;
+      // Prefer stems that explicitly tag rolle_len (…_p15_…).
+      const tagged = matches.find((i) => /_p\d+_/.test(String(i.id || i.file || "")));
+      return tagged || matches[0];
     }
 
-    function buildSignalMaps(data, trades) {
+    function barSecondsFromData(data) {
+      const iv = String((data && data.meta && data.meta.interval) || $("interval").value || "1h");
+      if (iv === "5m") return 300;
+      if (iv === "15m") return 900;
+      if (iv === "4h") return 14400;
+      return 3600;
+    }
+
+    function fillPosByTime(candles, trades) {
+      posByTime = new Map();
+      for (const c of candles) posByTime.set(c.time, "FLAT");
+      if (!trades || !trades.length || !candles.length) return;
+      const times = candles.map((c) => c.time);
+      for (const t of trades) {
+        const label = t.side === "long" ? "LONG" : "SHORT";
+        let lo = 0;
+        let hi = times.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (times[mid] < t.entryTime) lo = mid + 1;
+          else hi = mid;
+        }
+        for (let i = lo; i < times.length && times[i] < t.exitTime; i++) {
+          posByTime.set(times[i], label);
+        }
+      }
+    }
+
+    function buildSignalMaps(data, trades, visCandles) {
       signalByTime = new Map();
       probsByTime = new Map();
       candleByTime = new Map();
-      posByTime = new Map();
-      const candles = data.candles || [];
+      const thr = selectedAiThreshold();
+      const candles = visCandles || data.candles || [];
       for (const c of candles) {
         candleByTime.set(c.time, c);
-        posByTime.set(c.time, "FLAT");
-        if (c.signal) signalByTime.set(c.time, String(c.signal).toUpperCase());
         const pr = pickProbs(c);
         if (pr) probsByTime.set(c.time, pr);
+        const side = sigFromProbs(pr, thr);
+        if (side != null) signalByTime.set(c.time, sigLabel(side));
+        else if (c.signal) signalByTime.set(c.time, String(c.signal).toUpperCase());
       }
+      const t0 = candles.length ? candles[0].time : 0;
+      const t1 = candles.length ? candles[candles.length - 1].time : 0;
       for (const s of data.signals || []) {
         if (!s || s.time == null) continue;
-        if (s.signal != null) signalByTime.set(s.time, String(s.signal).toUpperCase());
+        if (s.time < t0 || s.time > t1) continue;
         const pr = pickProbs(s);
         if (pr) probsByTime.set(s.time, pr);
+        const side = sigFromProbs(pr, thr);
+        if (side != null) signalByTime.set(s.time, sigLabel(side));
+        else if (s.signal != null) signalByTime.set(s.time, String(s.signal).toUpperCase());
       }
-      for (const t of trades || []) {
-        const label = t.side === "long" ? "LONG" : "SHORT";
-        for (const c of candles) {
-          if (c.time >= t.entryTime && c.time < t.exitTime) posByTime.set(c.time, label);
-        }
-      }
+      fillPosByTime(candles, trades);
     }
 
     function hideHoverTip() {
@@ -770,11 +1873,13 @@
         lineWidth: 2,
       });
       priceChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-        if (!range) return;
+        if (!range || suppressRange) return;
         equityChart.timeScale().setVisibleLogicalRange(range);
+        clearTimeout(rangeTimer);
+        rangeTimer = setTimeout(() => maybeShiftForRange(range), 90);
       });
       equityChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-        if (!range) return;
+        if (!range || suppressRange) return;
         priceChart.timeScale().setVisibleLogicalRange(range);
       });
       priceChart.subscribeCrosshairMove(showHoverTip);
@@ -790,10 +1895,39 @@
       tradeLineSeries = [];
     }
 
-    function renderTrades(trades) {
-      clearTradeLines();
-      const markers = [];
+    function addDottedLevel(t0, t1, price, color) {
+      if (!priceChart || t0 == null || t1 == null || t0 === t1) return;
+      if (!Number.isFinite(price)) return;
+      const line = priceChart.addLineSeries({
+        color,
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dotted,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      line.setData([
+        { time: t0, value: price },
+        { time: t1, value: price },
+      ]);
+      tradeLineSeries.push(line);
+    }
+
+    function renderSlLadderLevels(trades) {
       for (const t of trades) {
+        if (!Number.isFinite(t.initSl) && !(t.tps && t.tps.length)) continue;
+        addDottedLevel(t.entryTime, t.exitTime, t.initSl, "rgba(239, 83, 80, 0.28)");
+        for (const px of t.tps || []) {
+          addDottedLevel(t.entryTime, t.exitTime, px, "rgba(38, 166, 154, 0.25)");
+        }
+      }
+    }
+
+    function renderTrades(visTrades, allTrades) {
+      clearTradeLines();
+      plottedTrades = visTrades || [];
+      const markers = [];
+      for (const t of plottedTrades) {
         const long = t.side === "long";
         const color = long ? "#26a69a" : "#ef5350";
         markers.push({
@@ -827,12 +1961,20 @@
         ]);
         tradeLineSeries.push(line);
       }
+      renderSlLadderLevels(plottedTrades);
       markers.sort((a, b) => a.time - b.time || a.text.localeCompare(b.text));
       candleSeries.setMarkers(markers);
 
+      const total = (allTrades || []).length;
       const body = $("tradeBody");
-      body.innerHTML = trades.map((t, i) => {
+      body.innerHTML = plottedTrades.map((t, i) => {
         const cls = t.pnl >= 0 ? "up" : "dn";
+        const r = Number(t.r);
+        const ep = Number(t.entryPrice);
+        const rTxt = Number.isFinite(r) && r > 0 ? fmtPx(r) : "—";
+        const rPctTxt = Number.isFinite(r) && r > 0 && Number.isFinite(ep) && ep > 0
+          ? `${((100 * r) / ep).toFixed(2)}%`
+          : "—";
         return `<tr data-i="${i}">
           <td>${i + 1}</td>
           <td class="${t.side === "long" ? "up" : "dn"}">${t.side}</td>
@@ -840,18 +1982,24 @@
           <td>${fmtTime(t.exitTime)}</td>
           <td>${fmtPx(t.entryPrice)}</td>
           <td>${fmtPx(t.exitPrice)}</td>
+          <td>${rTxt}</td>
+          <td>${rPctTxt}</td>
           <td class="${cls}">${fmtPnl(t.pnl)}</td>
           <td>${fmtPnl(t.pnlCum)}</td>
         </tr>`;
       }).join("");
-      body.querySelectorAll("tr").forEach((tr) => {
+      if (total > plottedTrades.length) {
+        body.insertAdjacentHTML(
+          "afterbegin",
+          `<tr><td colspan="10" style="color:#787b86">Showing ${plottedTrades.length} trades in chart span (${total} in window)</td></tr>`
+        );
+      }
+      body.querySelectorAll("tr[data-i]").forEach((tr) => {
         tr.addEventListener("click", () => {
-          const t = trades[Number(tr.dataset.i)];
+          const t = plottedTrades[Number(tr.dataset.i)];
           if (!t) return;
-          priceChart.timeScale().setVisibleRange({
-            from: t.entryTime - 3 * 3600,
-            to: t.exitTime + 3 * 3600,
-          });
+          const pad = 12 * barSecondsFromData(currentData);
+          revealTime(t.entryTime - pad, t.exitTime + pad);
         });
       });
     }
@@ -861,42 +2009,112 @@
       const wins = trades.filter((t) => t.pnl > 0).length;
       const pnl = trades.reduce((s, t) => s + (Number(t.pnl) || 0), 0);
       const wr = trades.length ? (100 * wins) / trades.length : 0;
+      const bal = startingBalance(meta);
+      const maxDd = maxDrawdown(view.equity, bal);
+      const pnlPct = bal > 0 ? (100 * pnl) / bal : 0;
+      const ddPct = bal > 0 ? (100 * maxDd) / bal : 0;
       const pnlCls = pnl >= 0 ? "up" : "dn";
-      const thr = meta.ai_threshold != null ? Number(meta.ai_threshold) : null;
-      const thrPct = thr != null ? `${(thr * 100).toFixed(0)}%` : "—";
+      const thrPct = fmtAiThr(view.aiThreshold != null ? view.aiThreshold : selectedAiThreshold());
       const slTag = view.slLadder
-        ? `<span>SL ladder <b>ON</b> (swing${SL_SWING_LEN}+BE+ladder)</span>`
-        : `<span>SL ladder <b>OFF</b></span>`;
+        ? `<span>SL ladder <b>ON</b> (pivot SL → BE@1R → ladder)</span>`
+        : view.exitArm
+          ? `<span>Exit <b>exit_arm ${view.exitMa === "mid" ? "mid MA" : "fast MA"}</b> + swing SL</span>`
+          : `<span>Exit <b>none</b> + swing SL</span>`;
+      const entryArmTag = view.entryArm
+        ? `<span>entry_arm <b>ON</b> (fast MA)</span>`
+        : `<span>entry_arm <b>OFF</b></span>`;
       const armTag = view.exitArm
-        ? `<span>exit_arm <b>ON</b> (SMA${meta.arm_sma || 14})</span>`
+        ? `<span>exit_arm <b>ON</b> (${view.exitMa === "mid" ? "mid MA48" : "fast MA14"})</span>`
         : `<span>exit_arm <b>OFF</b></span>`;
-      const stTag = view.stFilter
-        ? `<span>ST filter <b>ON</b> (${trades.length}/${view.rawCount})</span>`
-        : `<span>ST filter <b>OFF</b></span>`;
-      const L = meta.pivot_len != null ? Number(meta.pivot_len) : null;
+      const rTag = `<span>R min <b>${fmtRMinPct(view.rMinPct || 0)}</b></span>`;
+      const swingTag = `<span>Swing L <b>${view.swingLen || "—"}</b></span>`;
+      const stTag = view.regimeFilter && view.regimeFilter !== "off"
+        ? `<span>Regime <b>${regimeFilterLabel(view.regimeFilter)}</b> (${trades.length} segs / ${view.rawCount} opens)</span>`
+        : `<span>Regime <b>off</b></span>`;
+      const L = meta.rolle_len != null ? Number(meta.rolle_len) : null;
       const labelTag = meta.label_mode
         ? (L != null ? `${meta.label_mode} L=${L}` : meta.label_mode)
         : "—";
+      const opensTag = `<span>Opens <b>${view.rawCount}</b></span>`;
       $("stats").innerHTML = `
         <span>AI thr <b>${thrPct}</b></span>
+        ${entryArmTag}
         ${armTag}
         ${slTag}
+        ${swingTag}
+        ${rTag}
         ${stTag}
         <span>Label <b>${labelTag}</b></span>
         <span>Backbone <b>${meta.backbone || "—"}</b></span>
+        ${opensTag}
         <span>Trades <b>${trades.length}</b></span>
         <span>WR <b>${wr.toFixed(1)}%</b></span>
-        <span>PnL <b class="${pnlCls}">${fmtPnl(pnl)}</b></span>
+        <span>Bal <b>${bal.toFixed(0)}</b></span>
+        <span>PnL <b class="${pnlCls}">${fmtPnl(pnl)} (${fmtPct(pnlPct)})</b></span>
+        <span>Max DD <b class="dn">${maxDd.toFixed(2)} (${fmtPct(-Math.abs(ddPct))})</b></span>
       `;
+    }
+
+    function paintWindow(opts) {
+      if (!currentData || !candleSeries) return;
+      const win = windowMeta();
+      const view = getCachedView();
+      if (!view) return;
+      const visTrades = (view.trades || []).filter(
+        (t) => t.exitTime >= win.t0 && t.entryTime <= win.t1
+      );
+      suppressRange = true;
+      candleSeries.setData(win.vis);
+      const ma = currentData.ma || {};
+      maFastSeries.setData(sliceByTime(ma.fast || ma.ma14 || [], win.t0, win.t1));
+      maMidSeries.setData(sliceByTime(ma.mid || ma.ma48 || [], win.t0, win.t1));
+      maSlowSeries.setData(sliceByTime(ma.slow || [], win.t0, win.t1));
+      maLongSeries.setData(sliceByTime(ma.long || [], win.t0, win.t1));
+      applySupertrendWindow(win.t0, win.t1);
+      buildSignalMaps(currentData, view.trades, win.vis);
+      equitySeries.setData(sliceByTime(view.equity, win.t0, win.t1));
+      renderTrades(visTrades, view.trades);
+      renderStats(currentData.meta || {}, view);
+      const tf = (currentData.meta || {}).interval || $("interval").value;
+      const days = (currentData.meta || {}).days;
+      let status =
+        `${(currentData.meta || {}).symbol || ""} · ${tf} · ` +
+        `bars ${win.n ? win.i0 + 1 : 0}–${win.i1} / ${win.n}` +
+        (days ? ` · ${days}d` : "") +
+        (viewStart > 0 || viewEnd < win.n ? " · ‹ › to load more" : "");
+      if (opts && opts.rNote) {
+        status +=
+          ` · R min ${fmtRMinPct(view.rMinPct || 0)} · opens ${view.rawCount}` +
+          (view.regimeFilter && view.regimeFilter !== "off"
+            ? ` → ${view.trades.length} ${regimeFilterLabel(view.regimeFilter)} segs`
+            : "");
+      }
+      $("status").textContent = status;
+      requestAnimationFrame(() => {
+        if (opts && opts.logical) {
+          try {
+            priceChart.timeScale().setVisibleLogicalRange(opts.logical);
+            equityChart.timeScale().setVisibleLogicalRange(opts.logical);
+          } catch (e) { /* ignore */ }
+        }
+        suppressRange = false;
+      });
+    }
+
+    function syncRMinControl() {
+      // R min + swing SL apply to none / exit_arm / SL ladder.
+      const el = $("rMinPct");
+      const lab = $("rMinLabel");
+      if (el) el.disabled = false;
+      if (lab) lab.classList.remove("disabled-ctl");
     }
 
     function applyView() {
       if (!currentData) return;
-      const view = activeTradesAndEquity(currentData);
-      buildSignalMaps(currentData, view.trades);
-      equitySeries.setData(view.equity);
-      renderTrades(view.trades);
-      renderStats(currentData.meta || {}, view);
+      syncRMinControl();
+      cachedView = null;
+      cachedViewKey = "";
+      paintWindow({ rNote: true });
     }
 
     async function loadSeries() {
@@ -910,21 +2128,16 @@
       if (!res.ok) throw new Error(`HTTP ${res.status} for ${item.file}`);
       const data = await res.json();
       currentData = data;
+      cachedView = null;
+      cachedViewKey = "";
       ensureCharts();
-      candleSeries.setData(data.candles || []);
-      const ma = data.ma || {};
-      maFastSeries.setData(ma.fast || ma.ma14 || []);
-      maMidSeries.setData(ma.mid || ma.ma48 || []);
-      maSlowSeries.setData(ma.slow || []);
-      maLongSeries.setData(ma.long || []);
-      applySupertrend(data);
-      applyView();
+      resetWindowToEnd();
+      syncRMinControl();
+      paintWindow();
+      suppressRange = true;
       priceChart.timeScale().fitContent();
       equityChart.timeScale().fitContent();
-      const lm = item.label_mode || (currentData.meta || {}).label_mode || "";
-      const L = (currentData.meta || {}).pivot_len;
-      const lab = lm === "pivot_breakout" && L != null ? `${lm} L=${L}` : lm;
-      $("status").textContent = `${item.symbol} · ${lab} · ${item.engine} · ${item.days}d`;
+      requestAnimationFrame(() => { suppressRange = false; });
     }
 
     async function loadCatalog() {
@@ -936,9 +2149,11 @@
       await loadSeries();
     }
 
-    ["symbol", "labelMode", "engine", "days"].forEach((id) => {
+    ["interval", "symbol", "labelMode", "rolleLen", "engine", "backbone", "days"].forEach((id) => {
       $(id).addEventListener("change", async () => {
-        if (id === "symbol" || id === "labelMode" || id === "engine") fillSelects();
+        if (id === "interval" || id === "symbol" || id === "labelMode" || id === "rolleLen" || id === "engine" || id === "backbone") {
+          fillSelects();
+        }
         try { await loadSeries(); }
         catch (e) { $("status").textContent = String(e.message || e); }
       });
@@ -946,12 +2161,32 @@
     $("reload").addEventListener("click", () => loadCatalog().catch((e) => {
       $("status").textContent = String(e.message || e);
     }));
-    ["exitArm", "slLadder", "stFilter"].forEach((id) => {
-      $(id).addEventListener("change", () => {
+    $("chartBars").addEventListener("change", () => {
+      try {
+        resetWindowToEnd();
+        paintWindow();
+        suppressRange = true;
+        priceChart.timeScale().fitContent();
+        equityChart.timeScale().fitContent();
+        requestAnimationFrame(() => { suppressRange = false; });
+      } catch (e) { $("status").textContent = String(e.message || e); }
+    });
+    $("chartPrev").addEventListener("click", () => shiftWindow(-1));
+    $("chartNext").addEventListener("click", () => shiftWindow(1));
+    ["exitMode", "aiThreshold", "entryArm", "rMinPct", "regimeFilter"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      const run = () => {
         try { applyView(); }
         catch (e) { $("status").textContent = String(e.message || e); }
-      });
+      };
+      el.addEventListener("change", run);
+      // Some browsers only fire input on select; keep both so selects always reapply.
+      if (id === "rMinPct" || id === "exitMode" || id === "aiThreshold" || id === "regimeFilter") {
+        el.addEventListener("input", run);
+      }
     });
+    syncRMinControl();
 
     loadCatalog().catch((e) => {
       $("status").textContent = String(e.message || e);

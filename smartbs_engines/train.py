@@ -15,9 +15,8 @@ from torch.utils.data import DataLoader
 from smartbs_engines.calibrate import fetch_training_frame, fit_model_calibration
 from smartbs_engines.checkpoint import checkpoint_spec_fields, promote_checkpoint
 from smartbs_engines.config import PAIR_ALIASES, SmartBSConfig, resolve_checkpoint_dir
-from smartbs_engines.features import make_datasets, make_dual_datasets, make_multi_asset_datasets, num_inputs_for
+from smartbs_engines.features import make_datasets, make_multi_asset_datasets, num_inputs_for
 from smartbs_engines.model import (
-    BACKBONE_SMARTBS_DUAL_TF,
     build_classifier,
     default_kernel_size,
     model_forward,
@@ -58,16 +57,10 @@ def train_model(cfg: SmartBSConfig) -> str:
     backbone = normalize_backbone(getattr(cfg, "backbone", None))
     kernel_size = int(cfg.kernel_size)
     # Remap classic default k=3 to backbone-specific defaults when unset by caller.
-    if kernel_size == 3 and backbone not in ("tcn", BACKBONE_SMARTBS_DUAL_TF):
+    if kernel_size == 3 and backbone != "tcn":
         kernel_size = default_kernel_size(backbone)
     cfg.backbone = backbone
     cfg.kernel_size = kernel_size
-    if backbone == BACKBONE_SMARTBS_DUAL_TF:
-        ratio = int(getattr(cfg, "tf_ratio", 4) or 4)
-        if int(getattr(cfg, "lookback_15m", 0) or 0) <= 0:
-            cfg.lookback_15m = int(cfg.lookback) * ratio
-        if int(getattr(cfg, "num_inputs_15m", 0) or 0) <= 0:
-            cfg.num_inputs_15m = int(cfg.num_inputs)
 
     print(f"Multi-asset train set: {assets}")
     print(f"Feature engine: {cfg.feature_engine} ({cfg.num_inputs} inputs)")
@@ -76,11 +69,6 @@ def train_model(cfg: SmartBSConfig) -> str:
         src = tuple(getattr(cfg, "signal_engines", ()) or ())
         print(f"Signal sources: {','.join(src) if src else 'all(pool)'}")
     print(f"Backbone: {backbone} (kernel={kernel_size})")
-    if backbone == BACKBONE_SMARTBS_DUAL_TF:
-        print(
-            f"DualTF: lookback_1h={cfg.lookback} lookback_15m={cfg.lookback_15m} "
-            f"C15={cfg.num_inputs_15m} ratio={cfg.tf_ratio}"
-        )
     frames: list[tuple[pd.DataFrame, str]] = []
     primary_df = None
     for sym in assets:
@@ -103,10 +91,7 @@ def train_model(cfg: SmartBSConfig) -> str:
         raise RuntimeError("No asset data available for training")
 
     if len(frames) == 1:
-        if backbone == BACKBONE_SMARTBS_DUAL_TF:
-            train_ds, val_ds, _, _, labels, _ = make_dual_datasets(frames[0][0], cfg)
-        else:
-            train_ds, val_ds, _, labels = make_datasets(frames[0][0], cfg)
+        train_ds, val_ds, _, labels = make_datasets(frames[0][0], cfg)
     else:
         train_ds, val_ds, labels = make_multi_asset_datasets(frames, cfg)
 
@@ -231,7 +216,7 @@ def train_model(cfg: SmartBSConfig) -> str:
         "barrier_k": float(getattr(cfg, "barrier_k", 1.0) or 1.0),
         "barrier_horizon": int(getattr(cfg, "barrier_horizon", 4) or 4),
         "barrier_pct": float(getattr(cfg, "barrier_pct", 0.02) or 0.02),
-        "pivot_len": int(getattr(cfg, "pivot_len", 15) or 15),
+        "rolle_len": int(getattr(cfg, "rolle_len", 5) or 5),
         "ablation_zero_group": str(getattr(cfg, "ablation_zero_group", "") or ""),
         "num_inputs": cfg.num_inputs,
         "num_inputs_15m": int(getattr(cfg, "num_inputs_15m", 0) or 0),
@@ -335,13 +320,11 @@ def parse_args() -> SmartBSConfig:
         "--label-mode",
         choices=[
             "triple_barrier",
-            "pct_barrier",
-            "session_direction",
             "session_trend",
             "day_trend",
-            "pivot_breakout",
+            "rolle_breakout",
+            "pivot_breakout",  # legacy alias → rolle_breakout
             "forward_return",
-            "next_direction",
         ],
         default="triple_barrier",
     )
@@ -350,7 +333,7 @@ def parse_args() -> SmartBSConfig:
         "--barrier-pct",
         type=float,
         default=0.02,
-        help="pct_barrier ±fraction; session_direction / day_trend override",
+        help="day_trend ±fraction override (default mode uses 0.01)",
     )
     parser.add_argument(
         "--barrier-k",
@@ -362,14 +345,14 @@ def parse_args() -> SmartBSConfig:
         "--barrier-horizon",
         type=int,
         default=4,
-        help="triple_barrier / pct_barrier horizon bars "
-        "(ignored for pivot_breakout; that mode uses --pivot-len)",
+        help="triple_barrier horizon bars "
+        "(ignored for rolle_breakout; that mode uses --rolle-len)",
     )
     parser.add_argument(
-        "--pivot-len",
+        "--rolle-len",
         type=int,
-        default=15,
-        help="pivot_breakout rolling window + forward scan length L (default 15)",
+        default=5,
+        help="rolle_breakout window L + forward look for REH/REL updates (default 5)",
     )
     parser.add_argument(
         "--session-hours",
@@ -393,7 +376,7 @@ def parse_args() -> SmartBSConfig:
     parser.add_argument(
         "--backbone",
         default="tcn",
-        help="Model backbone: tcn | smartBSEntryV2 | smartBSTF | smartBSDualTF",
+        help="Model backbone: tcn | smartBSEntryV2 | smartBSTF",
     )
     parser.add_argument(
         "--signal-policy",
@@ -423,26 +406,23 @@ def parse_args() -> SmartBSConfig:
     eng = args.feature_engine
     from smartbs_engines.engines import resolve_feature_engine
     from smartbs_engines.pipeline import PipelineSpec
-    from smartbs_engines.signals import normalize_signal_sources
 
-    eng_name, sig_sources = resolve_feature_engine(
+    eng_name, _sig_sources = resolve_feature_engine(
         eng, str(args.signal_engines).strip() or None
     )
-    if eng_name == "signals":
-        sig_tuple = normalize_signal_sources(sig_sources)
-    else:
-        sig_tuple = ()
     backbone = normalize_backbone(args.backbone)
     if args.kernel_size is not None:
         kernel_size = int(args.kernel_size)
     else:
         kernel_size = default_kernel_size(backbone)
     pipe = PipelineSpec(
-        engines=sig_tuple if eng_name == "signals" else (eng_name,),
+        engines=(eng_name,),
         signal_policy=str(args.signal_policy),
         backbone=backbone,
         raw_ai=str(args.raw_ai_strategy),
     )
+    from smartbs_engines.labels import normalize_label_mode
+
     cfg = SmartBSConfig(
         trade_pair=trade_pair if trade_pair in assets else assets[0],
         interval=args.interval,
@@ -460,12 +440,12 @@ def parse_args() -> SmartBSConfig:
         train_align_15m=bool(args.train_align_15m),
         holdout_days=args.holdout_days,
         checkpoint_path=args.checkpoint,
-        label_mode=args.label_mode,
+        label_mode=normalize_label_mode(args.label_mode),
         ma_len=int(args.ma_len),
         barrier_pct=float(args.barrier_pct),
         barrier_k=float(args.barrier_k),
         barrier_horizon=int(args.barrier_horizon),
-        pivot_len=int(args.pivot_len),
+        rolle_len=int(args.rolle_len),
         session_hours=str(args.session_hours),
         train_assets=assets,
         feature_engine=eng_name,

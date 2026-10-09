@@ -29,7 +29,7 @@ bool SB_BuildTrendPullbackFeatureMatrix(const string symbol, double &features[][
    err = "";
    SBOhlc h1;
    int want = MathMax(SB_TP_WARMUP + 512, 800);
-   if(!SB_CopyRatesChrono(symbol, PERIOD_H1, want, h1))
+   if(!SB_CopyRatesChrono(symbol, SB_PrimaryTf(), want, h1))
      {
       err = "not enough H1 bars";
       return false;

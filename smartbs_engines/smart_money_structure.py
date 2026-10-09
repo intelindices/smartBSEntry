@@ -117,17 +117,35 @@ def map_15m_end_of_hour_to_1h(
     times_1h: np.ndarray,
     times_15m: np.ndarray,
     values_15m: np.ndarray,
+    *,
+    dst_bar_ms: int | None = None,
 ) -> np.ndarray:
-    """Snapshot each 15m series at the last 15m bar inside each 1h bucket."""
+    """Last *completed* 15m bar by each destination bar's close.
+
+    Destination duration is inferred from median ``times_1h`` spacing when
+    ``dst_bar_ms`` is omitted.
+
+    On 1h primary this matches the old end-of-hour snapshot (14:45 inside
+    the 14:00 hour). On 5m it is causal: a 14:00–14:05 bar sees 13:45, not
+    the 14:45 15m bar (that was a lookahead leak).
+    """
     n = len(times_1h)
     out = np.zeros(n, dtype=np.float64)
-    if len(times_15m) == 0:
+    if n == 0 or len(times_15m) == 0:
         return out
-    frame = pd.DataFrame({"t": times_15m, "v": values_15m})
-    frame["hour"] = (frame["t"] // HOUR_MS) * HOUR_MS
-    last_by_hour = frame.groupby("hour", sort=False)["v"].last()
-    mapped = pd.Series(times_1h).map(last_by_hour)
-    return mapped.ffill().fillna(0.0).to_numpy(dtype=np.float64)
+    dst = np.asarray(times_1h, dtype=np.int64)
+    src = np.asarray(times_15m, dtype=np.int64)
+    val = np.asarray(values_15m, dtype=np.float64)
+    if dst_bar_ms is None:
+        diffs = np.diff(dst)
+        diffs = diffs[diffs > 0]
+        dst_bar_ms = int(np.median(diffs)) if len(diffs) else HOUR_MS
+    complete_15 = src + M15_MS
+    close_dst = dst + int(dst_bar_ms)
+    idx = np.searchsorted(complete_15, close_dst, side="right") - 1
+    valid = idx >= 0
+    out[valid] = val[idx[valid]]
+    return out
 
 
 def load_aligned_15m(
@@ -224,8 +242,9 @@ def _load_aligned_interval(
     sym = str(symbol).replace("/", "").upper()
     src = (data_source or "").lower()
     t0 = int(df_1h["open_time"].iloc[0])
-    pad = max(infer_bar_ms(df_1h), HOUR_MS)
-    t1 = int(df_1h["open_time"].iloc[-1]) + pad
+    # Exclusive end = last primary bar's close. Do not pad +1h: that pulled
+    # future 15m bars into hour-bucket maps on 5m/15m primaries.
+    t1 = int(df_1h["open_time"].iloc[-1]) + infer_bar_ms(df_1h)
     iv = interval.strip().lower()
 
     if src in ("dukascopy", "duka"):

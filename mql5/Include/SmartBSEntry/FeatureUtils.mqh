@@ -5,8 +5,10 @@
 #define SMARTBS_FEATURE_UTILS_MQH
 
 #include "Indicators.mqh"
+#include "Common.mqh"
 
 #define SB_HOUR_SEC 3600
+#define SB_M15_MAP_SEC 900
 
 double SB_Clip(const double v, const double lo, const double hi)
   {
@@ -186,7 +188,8 @@ void SB_BarsSinceScoreDecay(const double &score[], const double thresh,
      }
   }
 
-// Snapshot last 15m value inside each 1h open-time hour bucket; ffill, else 0
+// Last completed 15m bar whose close <= destination bar close.
+// 1h primary: 14:45 inside 14:00 (same as old hour-end). 5m: 13:45 at 14:00, not 14:45.
 void SB_Map15mEndOfHour(const datetime &h1_times[], const datetime &m15_times[],
                         const double &m15_values[], double &mapped[])
   {
@@ -197,58 +200,16 @@ void SB_Map15mEndOfHour(const datetime &h1_times[], const datetime &m15_times[],
    if(n1 <= 0 || n15 <= 0)
       return;
 
-   // Build last-value-per-hour from 15m (chrono ascending)
-   datetime hours[];
-   double   lasts[];
-   ArrayResize(hours, 0);
-   ArrayResize(lasts, 0);
-   datetime cur_h = -1;
-   double   cur_v = 0.0;
-   for(int k = 0; k < n15; k++)
-     {
-      datetime h = (datetime)(((long)m15_times[k] / (long)SB_HOUR_SEC) * (long)SB_HOUR_SEC);
-      if(cur_h < 0 || h != cur_h)
-        {
-         if(cur_h >= 0)
-           {
-            int m = ArraySize(hours);
-            ArrayResize(hours, m + 1);
-            ArrayResize(lasts, m + 1);
-            hours[m] = cur_h;
-            lasts[m] = cur_v;
-           }
-         cur_h = h;
-        }
-      cur_v = m15_values[k];
-     }
-   if(cur_h >= 0)
-     {
-      int m = ArraySize(hours);
-      ArrayResize(hours, m + 1);
-      ArrayResize(lasts, m + 1);
-      hours[m] = cur_h;
-      lasts[m] = cur_v;
-     }
-
-   int nh = ArraySize(hours);
-   int hi = 0;
-   double last_mapped = 0.0;
-   bool have = false;
+   const long dst_dur = (long)SB_PrimaryBarSeconds();
+   const long src_dur = (long)SB_M15_MAP_SEC;
+   int k = -1;
    for(int i = 0; i < n1; i++)
      {
-      datetime h = (datetime)(((long)h1_times[i] / (long)SB_HOUR_SEC) * (long)SB_HOUR_SEC);
-      while(hi + 1 < nh && hours[hi + 1] <= h)
-         hi++;
-      if(hi < nh && hours[hi] == h)
-        {
-         last_mapped = lasts[hi];
-         have = true;
-         mapped[i] = last_mapped;
-        }
-      else if(have)
-         mapped[i] = last_mapped;
-      else
-         mapped[i] = 0.0;
+      const long dst_close = (long)h1_times[i] + dst_dur;
+      while(k + 1 < n15 && (long)m15_times[k + 1] + src_dur <= dst_close)
+         k++;
+      if(k >= 0 && (long)m15_times[k] + src_dur <= dst_close)
+         mapped[i] = m15_values[k];
      }
   }
 

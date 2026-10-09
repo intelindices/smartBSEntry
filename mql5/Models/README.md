@@ -1,37 +1,33 @@
 # SmartBSEntry ONNX models
 
-Not stored in git. Current EA default: **bar raw_ai + `pivot_engine`** (12ch, pivot_breakout p5, smartBSEntryV2).
+Not stored in git (except when checked in for a release pack). Current EA default:
+**bar raw_ai + `maribbon`** on **XAUUSD 1h** (39ch, rolle_breakout L=5, smartBSEntryV2).
 
-## Export (commodities, pivot_engine)
+## Export (default pack)
 
 ```bash
-$ckpt = "smartbs_engines/checkpoints_pivot_engine_core_pivot_breakout_p5_commodity_entryv2/pivot_engine"
-$out  = "mql5/Models/SmartBSEntry"
-foreach ($sym in @("XAUUSD","XAGUSD","XTIUSD","NATGAS","PLATINUM")) {
-  python -m smartbs_engines.export_onnx `
-    --checkpoint "$ckpt/$sym.pt" `
-    --out "$out/${sym}_pivot_engine.onnx"
-}
+python -m smartbs_engines.export_onnx `
+  --checkpoint checkpoints_rolle_breakout_p5_1h_entryv2/maribbon/XAUUSD.pt `
+  --out mql5/Models/SmartBSEntry/XAUUSD_maribbon_1h.onnx
 ```
 
 ## Install for MT5
 
-Copy `mql5/Models/SmartBSEntry/*_pivot_engine.{onnx,json}` → terminal `MQL5/Files/SmartBSEntry/`.
+Copy `mql5/Models/SmartBSEntry/XAUUSD_maribbon_1h.{onnx,json}` → terminal `MQL5/Files/SmartBSEntry/`.
 
-(Or recompile EA — `#property tester_file` ships the models into the Strategy Tester.)
+(Or recompile EA — `#property tester_file` / `TesterFiles.mqh` ships models into the Strategy Tester.)
 
 ## EA inputs (Strategy Tester)
 
-Defaults match Python every-bar pivot replay:
-
 | Input | Value |
 |---|---|
-| `InpEngines` | `pivot_engine` |
-| `InpTradePolicy` | `bar` (every H1) |
+| `InpEngines` | `maribbon` |
+| `InpTimeframe` | `H1` |
+| `InpTradePolicy` | `bar` |
 | `InpSignalMode` | `raw_ai` |
 | `InpAiThreshold` | `0` |
-| `InpSignalPointGate` / `InpMaAiGate` / `InpUseStopLoss` | `false` |
-| `InpLot` | `0.1` (XAU) |
-| Chart | XAUUSD / XAG / XTI / NATGAS / PLATINUM **H1** |
+| `InpStAtrLen` | `5` (match rolle_len) |
+| `InpExitMode` | `SL ladder` |
+| Chart | XAUUSD **H1** |
 
-Model sidecar: 12 inputs × lookback 64, `label_mode=pivot_breakout`, `pivot_len=5`.
+Model sidecar: 39 inputs × lookback 64, `label_mode=rolle_breakout`, `rolle_len=5`.

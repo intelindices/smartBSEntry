@@ -11,7 +11,6 @@ import torch
 from torch.utils.data import ConcatDataset, Dataset
 
 from smartbs_engines.config import SmartBSConfig
-from smartbs_engines.engines import normalize_feature_engine
 from smartbs_engines.labels import select_barrier_train_indices
 from smartbs_engines.registry import get_engine
 
@@ -23,10 +22,8 @@ def feature_names_for(
 ) -> list[str]:
     from smartbs_engines.engines import resolve_feature_engine
 
-    name, sources = resolve_feature_engine(engine, signal_engines)
-    if name == "signals":
-        return list(get_engine("signals", signal_sources=sources).feature_names)
-    return list(get_engine(normalize_feature_engine(engine)).feature_names)
+    name, _sources = resolve_feature_engine(engine, signal_engines)
+    return list(get_engine(name).feature_names)
 
 
 def num_inputs_for(
@@ -49,28 +46,10 @@ def build_feature_matrix(
     """Build ``(n, num_features)`` from 1H OHLCV via the selected engine."""
     from smartbs_engines.engines import resolve_feature_engine
 
-    name, sources = resolve_feature_engine(feature_engine, signal_engines)
-    eng = (
-        get_engine("signals", signal_sources=sources)
-        if name == "signals"
-        else get_engine(name)
-    )
-    if name in (
-        "smart_money",
-        "rsi_divergence",
-        "dbb",
-        "signals",
-        "all_blend",
-        "maribbon",
-    ):
-        feats = eng.compute(df, symbol=symbol, data_source=data_source).features
-    else:
-        feats = eng.compute(df).features
-    zero_g = (ablation_zero_group or "").strip().lower()
-    if zero_g and name == "all_blend":
-        from smartbs_engines.engine_all_blend import zero_all_blend_group
-
-        feats = zero_all_blend_group(feats, zero_g, with_common=True)
+    name, _sources = resolve_feature_engine(feature_engine, signal_engines)
+    eng = get_engine(name)
+    feats = eng.compute(df, symbol=symbol, data_source=data_source).features
+    _ = ablation_zero_group
     return feats
 
 
@@ -122,94 +101,12 @@ class CandleWindowDataset(Dataset):
 
 
 def _build_labels(df: pd.DataFrame, cfg: SmartBSConfig) -> np.ndarray:
-    mode = cfg.label_mode
-    if mode == "triple_barrier":
-        from smartbs_engines.labels import label_triple_barrier
+    from smartbs_engines.labels import LABEL_PLUGINS, normalize_label_mode
+    from smartbs_engines.plugins.base import ensure_plugins_loaded
 
-        return label_triple_barrier(
-            df["high"].to_numpy(dtype=np.float64),
-            df["low"].to_numpy(dtype=np.float64),
-            df["close"].to_numpy(dtype=np.float64),
-            k_up=cfg.barrier_k,
-            k_dn=cfg.barrier_k,
-            horizon=cfg.barrier_horizon,
-        ).labels
-    if mode == "pct_barrier":
-        from smartbs_engines.labels import label_pct_barrier
-
-        pct = float(getattr(cfg, "barrier_pct", 0.02) or 0.02)
-        return label_pct_barrier(
-            df["high"].to_numpy(dtype=np.float64),
-            df["low"].to_numpy(dtype=np.float64),
-            df["close"].to_numpy(dtype=np.float64),
-            pct_up=pct,
-            pct_dn=pct,
-            horizon=int(cfg.barrier_horizon),
-        ).labels
-    if mode == "session_direction":
-        from smartbs_engines.labels import (
-            DEFAULT_SESSION_DIRECTION_PCT,
-            label_session_direction,
-        )
-
-        # Mode contract ±0.5%. Override with barrier_pct only when not the generic 0.02 default.
-        raw = float(
-            getattr(cfg, "barrier_pct", DEFAULT_SESSION_DIRECTION_PCT)
-            or DEFAULT_SESSION_DIRECTION_PCT
-        )
-        pct = DEFAULT_SESSION_DIRECTION_PCT if abs(raw - 0.02) < 1e-15 else raw
-        return label_session_direction(
-            df["open"].to_numpy(dtype=np.float64),
-            df["close"].to_numpy(dtype=np.float64),
-            df["open_time"].to_numpy(dtype=np.int64),
-            pct=pct,
-        ).labels
-    if mode == "session_trend":
-        from smartbs_engines.labels import label_session_trend
-
-        k, horizon = _session_trend_barrier_params(cfg)
-        return label_session_trend(
-            df["high"].to_numpy(dtype=np.float64),
-            df["low"].to_numpy(dtype=np.float64),
-            df["close"].to_numpy(dtype=np.float64),
-            df["open_time"].to_numpy(dtype=np.int64),
-            k=k,
-            horizon=horizon,
-            session_hours=getattr(cfg, "session_hours", None),
-        ).labels
-    if mode == "day_trend":
-        from smartbs_engines.labels import label_day_trend
-
-        return label_day_trend(
-            df["close"].to_numpy(dtype=np.float64),
-            df["open_time"].to_numpy(dtype=np.int64),
-            pct=_day_trend_pct(cfg),
-            session_hours=getattr(cfg, "session_hours", None),
-        ).labels
-    if mode == "pivot_breakout":
-        from smartbs_engines.labels import label_pivot_breakout
-
-        plen, hor = _pivot_breakout_params(cfg)
-        return label_pivot_breakout(
-            df["high"].to_numpy(dtype=np.float64),
-            df["low"].to_numpy(dtype=np.float64),
-            pivot_len=plen,
-            horizon=hor,
-        ).labels
-    if mode == "forward_return":
-        return label_forward_returns(df["close"].to_numpy(), cfg.horizon, cfg.return_threshold)
-    if mode == "next_direction":
-        from smartbs_engines.labels import label_next_direction
-
-        return label_next_direction(
-            df["high"].to_numpy(dtype=np.float64),
-            df["low"].to_numpy(dtype=np.float64),
-        )
-    raise ValueError(
-        f"label_mode={mode!r} unknown. Use triple_barrier / pct_barrier / "
-        "session_direction / session_trend / day_trend / pivot_breakout / "
-        "forward_return / next_direction."
-    )
+    ensure_plugins_loaded()
+    mode = normalize_label_mode(cfg.label_mode)
+    return LABEL_PLUGINS.get(mode).compute(df, cfg)
 
 
 def _session_trend_barrier_params(cfg: SmartBSConfig) -> tuple[float, int]:
@@ -233,15 +130,14 @@ def _day_trend_pct(cfg: SmartBSConfig) -> float:
     return DEFAULT_DAY_TREND_PCT if abs(raw - 0.02) < 1e-15 else raw
 
 
-def _pivot_breakout_params(cfg: SmartBSConfig) -> tuple[int, int]:
-    """pivot_breakout: rolling window L = pivot_len; horizon forced to L.
+def _rolle_breakout_params(cfg: SmartBSConfig) -> tuple[int, int]:
+    """rolle_breakout: rolling window L = rolle_len; horizon forced to L.
 
     ``barrier_horizon`` is ignored for this mode.
     """
-    from smartbs_engines.labels import DEFAULT_PIVOT_BREAKOUT_LEN
+    from smartbs_engines.labels import rolle_len_of
 
-    plen = int(getattr(cfg, "pivot_len", DEFAULT_PIVOT_BREAKOUT_LEN) or DEFAULT_PIVOT_BREAKOUT_LEN)
-    plen = max(plen, 1)
+    plen = rolle_len_of(cfg)
     return plen, plen
 
 
@@ -272,48 +168,46 @@ def _day_trend_resolved(df: pd.DataFrame, cfg: SmartBSConfig) -> np.ndarray:
     ).resolved
 
 
-def _pivot_breakout_resolved(df: pd.DataFrame, cfg: SmartBSConfig) -> np.ndarray:
-    from smartbs_engines.labels import label_pivot_breakout
+def _rolle_breakout_resolved(df: pd.DataFrame, cfg: SmartBSConfig) -> np.ndarray:
+    from smartbs_engines.labels import label_rolle_breakout
 
-    plen, hor = _pivot_breakout_params(cfg)
-    return label_pivot_breakout(
+    plen, hor = _rolle_breakout_params(cfg)
+    return label_rolle_breakout(
         df["high"].to_numpy(dtype=np.float64),
         df["low"].to_numpy(dtype=np.float64),
-        pivot_len=plen,
+        rolle_len=plen,
         horizon=hor,
     ).resolved
 
 
 def make_datasets(df: pd.DataFrame, cfg: SmartBSConfig, *, symbol: str | None = None):
     from smartbs_engines.engines import resolve_feature_engine
+    from smartbs_engines.labels import normalize_label_mode
 
-    engine, sources = resolve_feature_engine(
+    engine, _sources = resolve_feature_engine(
         getattr(cfg, "feature_engine", "maribbon"),
         getattr(cfg, "signal_engines", ()) or None,
     )
     sym = symbol or cfg.trade_pair
+    label_mode = normalize_label_mode(cfg.label_mode)
     features = build_feature_matrix(
         df,
         feature_engine=engine,
         symbol=sym,
         data_source=cfg.data_source,
-        signal_engines=sources,
-        ablation_zero_group=str(getattr(cfg, "ablation_zero_group", "") or ""),
     )
     labels = _build_labels(df, cfg)
 
     horizon_tail = 0
-    if cfg.label_mode == "forward_return":
+    if label_mode == "forward_return":
         horizon_tail = int(cfg.horizon)
-    elif cfg.label_mode == "next_direction":
-        horizon_tail = 1
-    elif cfg.label_mode == "session_trend":
+    elif label_mode == "session_trend":
         _, horizon_tail = _session_trend_barrier_params(cfg)
-    elif cfg.label_mode == "day_trend":
+    elif label_mode == "day_trend":
         # NY end is same UTC day; resolved mask drops unfinished days.
         horizon_tail = 0
-    elif cfg.label_mode == "pivot_breakout":
-        _, horizon_tail = _pivot_breakout_params(cfg)
+    elif label_mode == "rolle_breakout":
+        _, horizon_tail = _rolle_breakout_params(cfg)
     usable = len(df) - horizon_tail
     usable = max(usable, cfg.lookback)
     split = int(usable * (1.0 - cfg.val_ratio))
@@ -322,67 +216,37 @@ def make_datasets(df: pd.DataFrame, cfg: SmartBSConfig, *, symbol: str | None = 
     train_idxs = list(range(cfg.lookback - 1, split))
     val_idxs = list(range(split, usable))
 
-    if cfg.label_mode in (
+    if label_mode in (
         "triple_barrier",
-        "pct_barrier",
-        "session_direction",
         "session_trend",
         "day_trend",
-        "pivot_breakout",
+        "rolle_breakout",
     ):
-        warm = max(
-            (
-                get_engine("signals", signal_sources=sources).warmup_bars
-                if engine == "signals"
-                else get_engine(engine).warmup_bars
-            ),
-            cfg.lookback - 1,
-        )
-        if cfg.label_mode == "session_direction":
-            from smartbs_engines.common_channels import max_session_hours
-            from smartbs_engines.labels import _infer_bar_ms
-
-            bar_ms = _infer_bar_ms(df["open_time"].to_numpy(dtype=np.int64))
-            sess_h = max_session_hours(getattr(cfg, "session_hours", None))
-            session_tail = max(1, int((sess_h * 3_600_000) // bar_ms) + 2)
-            tail = usable - session_tail
-        elif cfg.label_mode in ("session_trend", "day_trend", "pivot_breakout"):
+        warm = max(get_engine(engine).warmup_bars, cfg.lookback - 1)
+        if label_mode in ("session_trend", "day_trend", "rolle_breakout"):
             # usable already excludes horizon_tail; resolved mask drops unfinished bars.
             tail = usable
         else:
             tail = usable - cfg.barrier_horizon
         cand = [i for i in train_idxs if warm <= i < tail]
         val_idxs = [i for i in val_idxs if warm <= i < tail]
-        if cfg.label_mode == "session_trend":
+        if label_mode == "session_trend":
             resolved = _session_trend_resolved(df, cfg)
             cand = [i for i in cand if resolved[i]]
             val_idxs = [i for i in val_idxs if resolved[i]]
-        elif cfg.label_mode == "day_trend":
+        elif label_mode == "day_trend":
             resolved = _day_trend_resolved(df, cfg)
             cand = [i for i in cand if resolved[i]]
             val_idxs = [i for i in val_idxs if resolved[i]]
-        elif cfg.label_mode == "pivot_breakout":
-            resolved = _pivot_breakout_resolved(df, cfg)
+        elif label_mode == "rolle_breakout":
+            resolved = _rolle_breakout_resolved(df, cfg)
             cand = [i for i in cand if resolved[i]]
             val_idxs = [i for i in val_idxs if resolved[i]]
         train_idxs = select_barrier_train_indices(cand, labels, seed=cfg.seed)
-    elif cfg.label_mode == "next_direction":
-        # Include FLAT (inside bars); balance classes like barrier modes.
-        warm_eng = (
-            get_engine("signals", signal_sources=sources)
-            if engine == "signals"
-            else get_engine(engine)
-        )
-        warm = max(warm_eng.warmup_bars, cfg.lookback - 1)
-        train_idxs = select_barrier_train_indices(
-            [i for i in train_idxs if i >= warm], labels, seed=cfg.seed
-        )
-        val_idxs = [i for i in val_idxs if i >= warm]
-    elif cfg.label_mode != "forward_return":
+    elif label_mode != "forward_return":
         raise ValueError(
-            f"label_mode={cfg.label_mode!r} unknown; use triple_barrier / pct_barrier / "
-            "session_direction / session_trend / day_trend / pivot_breakout / "
-            "forward_return / next_direction"
+            f"label_mode={label_mode!r} unknown; use triple_barrier / "
+            "session_trend / day_trend / rolle_breakout / forward_return"
         )
 
     train_ds = CandleWindowDataset(
@@ -480,13 +344,15 @@ def make_dual_datasets(
 ):
     """Build DualWindowDataset train/val for ``smartBSDualTF``."""
     from smartbs_engines.engines import resolve_feature_engine
+    from smartbs_engines.labels import normalize_label_mode
     from smartbs_engines.smart_money_structure import load_aligned_15m
 
-    engine, sources = resolve_feature_engine(
+    engine, _sources = resolve_feature_engine(
         getattr(cfg, "feature_engine", "maribbon"),
         getattr(cfg, "signal_engines", ()) or None,
     )
     sym = symbol or cfg.trade_pair
+    label_mode = normalize_label_mode(cfg.label_mode)
     if df_15m is None:
         df_15m = load_aligned_15m(df_1h, symbol=sym, data_source=cfg.data_source)
     if df_15m is None or len(df_15m) < 64:
@@ -497,16 +363,12 @@ def make_dual_datasets(
         feature_engine=engine,
         symbol=sym,
         data_source=cfg.data_source,
-        signal_engines=sources,
-        ablation_zero_group=str(getattr(cfg, "ablation_zero_group", "") or ""),
     )
     feats_15m = build_feature_matrix(
         df_15m,
         feature_engine=engine,
         symbol=sym,
         data_source=cfg.data_source,
-        signal_engines=sources,
-        ablation_zero_group=str(getattr(cfg, "ablation_zero_group", "") or ""),
     )
     labels = _build_labels(df_1h, cfg)
     end15 = build_1h_to_15m_end_index(
@@ -519,16 +381,14 @@ def make_dual_datasets(
     lb15 = int(getattr(cfg, "lookback_15m", 0) or 0) or lb1 * ratio
 
     horizon_tail = 0
-    if cfg.label_mode == "forward_return":
+    if label_mode == "forward_return":
         horizon_tail = int(cfg.horizon)
-    elif cfg.label_mode == "next_direction":
-        horizon_tail = 1
-    elif cfg.label_mode == "session_trend":
+    elif label_mode == "session_trend":
         _, horizon_tail = _session_trend_barrier_params(cfg)
-    elif cfg.label_mode == "day_trend":
+    elif label_mode == "day_trend":
         horizon_tail = 0
-    elif cfg.label_mode == "pivot_breakout":
-        _, horizon_tail = _pivot_breakout_params(cfg)
+    elif label_mode == "rolle_breakout":
+        _, horizon_tail = _rolle_breakout_params(cfg)
     usable = len(df_1h) - horizon_tail
     usable = max(usable, lb1)
     split = int(usable * (1.0 - cfg.val_ratio))
@@ -537,60 +397,37 @@ def make_dual_datasets(
     train_idxs = list(range(lb1 - 1, split))
     val_idxs = list(range(split, usable))
 
-    if cfg.label_mode in (
+    if label_mode in (
         "triple_barrier",
-        "pct_barrier",
-        "session_direction",
         "session_trend",
         "day_trend",
-        "pivot_breakout",
+        "rolle_breakout",
     ):
-        warm = max(
-            (
-                get_engine("signals", signal_sources=sources).warmup_bars
-                if engine == "signals"
-                else get_engine(engine).warmup_bars
-            ),
-            lb1 - 1,
-        )
-        if cfg.label_mode == "session_direction":
-            from smartbs_engines.common_channels import max_session_hours
-            from smartbs_engines.labels import _infer_bar_ms
-
-            bar_ms = _infer_bar_ms(df_1h["open_time"].to_numpy(dtype=np.int64))
-            sess_h = max_session_hours(getattr(cfg, "session_hours", None))
-            session_tail = max(1, int((sess_h * 3_600_000) // bar_ms) + 2)
-            tail = usable - session_tail
-        elif cfg.label_mode in ("session_trend", "day_trend", "pivot_breakout"):
+        warm = max(get_engine(engine).warmup_bars, lb1 - 1)
+        if label_mode in ("session_trend", "day_trend", "rolle_breakout"):
             tail = usable
         else:
             tail = usable - cfg.barrier_horizon
         cand = [i for i in train_idxs if warm <= i < tail]
         val_idxs = [i for i in val_idxs if warm <= i < tail]
-        if cfg.label_mode == "session_trend":
+        if label_mode == "session_trend":
             resolved = _session_trend_resolved(df_1h, cfg)
             cand = [i for i in cand if resolved[i]]
             val_idxs = [i for i in val_idxs if resolved[i]]
-        elif cfg.label_mode == "day_trend":
+        elif label_mode == "day_trend":
             resolved = _day_trend_resolved(df_1h, cfg)
             cand = [i for i in cand if resolved[i]]
             val_idxs = [i for i in val_idxs if resolved[i]]
-        elif cfg.label_mode == "pivot_breakout":
-            resolved = _pivot_breakout_resolved(df_1h, cfg)
+        elif label_mode == "rolle_breakout":
+            resolved = _rolle_breakout_resolved(df_1h, cfg)
             cand = [i for i in cand if resolved[i]]
             val_idxs = [i for i in val_idxs if resolved[i]]
         train_idxs = select_barrier_train_indices(cand, labels, seed=cfg.seed)
-    elif cfg.label_mode == "next_direction":
-        warm_eng = (
-            get_engine("signals", signal_sources=sources)
-            if engine == "signals"
-            else get_engine(engine)
+    elif label_mode != "forward_return":
+        raise ValueError(
+            f"label_mode={label_mode!r} unknown; use triple_barrier / "
+            "session_trend / day_trend / rolle_breakout / forward_return"
         )
-        warm = max(warm_eng.warmup_bars, lb1 - 1)
-        train_idxs = select_barrier_train_indices(
-            [i for i in train_idxs if i >= warm], labels, seed=cfg.seed
-        )
-        val_idxs = [i for i in val_idxs if i >= warm]
 
     train_ds = DualWindowDataset(
         feats_1h, feats_15m, labels, lb1, lb15, end15, indices=train_idxs
@@ -605,19 +442,13 @@ def make_multi_asset_datasets(
     asset_frames: list[tuple[pd.DataFrame, str]],
     cfg: SmartBSConfig,
 ):
-    from smartbs_engines.model import BACKBONE_SMARTBS_DUAL_TF, normalize_backbone
-
     train_parts = []
     val_parts = []
     all_labels = []
-    dual = normalize_backbone(getattr(cfg, "backbone", None)) == BACKBONE_SMARTBS_DUAL_TF
     for df, _pair in asset_frames:
         if df is None or len(df) < cfg.lookback + 50:
             continue
-        if dual:
-            train_ds, val_ds, _, _, labels, _ = make_dual_datasets(df, cfg, symbol=_pair)
-        else:
-            train_ds, val_ds, _, labels = make_datasets(df, cfg, symbol=_pair)
+        train_ds, val_ds, _, labels = make_datasets(df, cfg, symbol=_pair)
         if len(train_ds):
             train_parts.append(train_ds)
         if len(val_ds):

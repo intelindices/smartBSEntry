@@ -8,6 +8,7 @@ Usage:
   python -m smartbs_engines._train_replay_all_st
   python -m smartbs_engines._train_replay_all_st --train-years 5
   python -m smartbs_engines._train_replay_all_st --label-mode forward_return --interval 15m --ckpt-root .../checkpoints_fwd_15m --out-stem asset_engine_fwd_15m
+  python -m smartbs_engines._train_replay_all_st --label-mode rolle_breakout --interval 4h --backbone smartBSEntryV2 --engines maribbon
   python -m smartbs_engines._train_replay_all_st --skip-train
   python -m smartbs_engines._train_replay_all_st --symbols XAUUSD,BTCUSD
 """
@@ -110,8 +111,7 @@ def _classes_from_probs(
 ) -> np.ndarray:
     """Map (n,3) probs → class ids. Gate: max(P_long,P_short) < thr → FLAT.
 
-    ``force_side=True``: always pick LONG vs SHORT, never FLAT (legacy close-only
-    next_direction). Range-break next_direction trains FLAT and uses argmax.
+    ``force_side=True``: always pick LONG vs SHORT, never FLAT.
     """
     p_long = probs[:, 1]
     p_short = probs[:, 2]
@@ -572,13 +572,13 @@ def replay_raw_ai(
         from smartbs_engines.registry import get_engine
 
         policy = pipe.make_signal_policy()
-        sig_eng = get_engine("signals", signal_sources=pipe.engines)
-        sig_res = sig_eng.compute(full)
-        sig_feats = np.asarray(sig_res.features, dtype=np.float64)
+        feat_eng = get_engine(pipe.feature_engine_name())
+        feat_res = feat_eng.compute(full, symbol=symbol, data_source="mt5")
+        feat_mat = np.asarray(feat_res.features, dtype=np.float64)
         decision = policy.decide(
             full,
-            features=sig_feats,
-            feature_names=list(sig_eng.feature_names),
+            features=feat_mat,
+            feature_names=list(feat_eng.feature_names),
             symbol=symbol,
             data_source="mt5",
         )
@@ -587,8 +587,8 @@ def replay_raw_ai(
             decision,
             pipe.raw_ai,
             require_agree=pipe.signal_require_agree,
-            features=sig_feats,
-            feature_names=list(sig_eng.feature_names),
+            features=feat_mat,
+            feature_names=list(feat_eng.feature_names),
             thr=pipe.signal_thr,
         )
         gate_sp = f"{pipe.signal_policy}:{pipe.raw_ai}"
@@ -741,8 +741,9 @@ def train_one(
     ma_len: int = 14,
     barrier_pct: float = 0.02,
     session_hours: str = "normal",
-    pivot_len: int = 15,
+    rolle_len: int = 5,
     interval: str = "1h",
+    holdout_days: int = 360,
     backbone: str = "tcn",
     kernel_size: int | None = None,
     signal_engines: str = "",
@@ -752,7 +753,6 @@ def train_one(
     from smartbs_engines.engines import resolve_feature_engine
     from smartbs_engines.model import default_kernel_size, normalize_backbone
     from smartbs_engines.pipeline import PipelineSpec
-    from smartbs_engines.signals import normalize_signal_sources
 
     bb = normalize_backbone(backbone)
     if kernel_size is None or int(kernel_size) <= 0:
@@ -760,10 +760,9 @@ def train_one(
     else:
         ks = int(kernel_size)
 
-    eng_name, sources = resolve_feature_engine(eng, signal_engines.strip() or None)
-    sig_tuple = normalize_signal_sources(sources) if eng_name == "signals" else ()
+    eng_name, _sources = resolve_feature_engine(eng, signal_engines.strip() or None)
     pipe = PipelineSpec(
-        engines=sig_tuple if eng_name == "signals" else (eng_name,),
+        engines=(eng_name,),
         signal_policy=str(signal_policy),
         backbone=bb,
         raw_ai=str(raw_ai_strategy),
@@ -776,11 +775,11 @@ def train_one(
         train_years=float(train_years),
         train_from_date="",
         train_align_15m=True,
-        holdout_days=360,
+        holdout_days=int(holdout_days),
         epochs=15,
         batch_size=128,
         feature_engine=eng_name,
-        signal_engines=sig_tuple,
+        signal_engines=(),
         signal_policy=pipe.signal_policy,
         raw_ai_strategy=pipe.raw_ai,
         signal_point_gate=pipe.raw_ai == "signal_gate",
@@ -790,13 +789,13 @@ def train_one(
         train_assets=[sym],
         checkpoint_path="",
         label_mode=label_mode,
-        horizon=1 if label_mode == "next_direction" else int(horizon),
+        horizon=int(horizon),
         return_threshold=float(return_threshold),
         barrier_k=float(barrier_k),
         barrier_horizon=int(barrier_horizon),
         ma_len=int(ma_len),
         barrier_pct=float(barrier_pct),
-        pivot_len=int(pivot_len),
+        rolle_len=int(rolle_len),
         session_hours=str(session_hours),
     )
     os.environ["SMARTBS_CHECKPOINT_DIR"] = str(ckpt_root)
@@ -817,13 +816,11 @@ def main() -> None:
         "--label-mode",
         choices=[
             "triple_barrier",
-            "pct_barrier",
-            "session_direction",
             "session_trend",
             "day_trend",
-            "pivot_breakout",
+            "rolle_breakout",
+            "pivot_breakout",  # legacy alias → rolle_breakout
             "forward_return",
-            "next_direction",
         ],
         default="triple_barrier",
     )
@@ -870,20 +867,20 @@ def main() -> None:
         "--barrier-horizon",
         type=int,
         default=4,
-        help="triple_barrier / pct_barrier horizon bars "
-        "(ignored for pivot_breakout; that mode uses --pivot-len)",
+        help="triple_barrier horizon bars "
+        "(ignored for rolle_breakout; that mode uses --rolle-len)",
     )
     ap.add_argument(
-        "--pivot-len",
+        "--rolle-len",
         type=int,
-        default=15,
-        help="pivot_breakout rolling window + forward scan length L (default 15)",
+        default=5,
+        help="rolle_breakout window L + forward look for REH/REL updates (default 5)",
     )
     ap.add_argument(
         "--barrier-pct",
         type=float,
         default=0.02,
-        help="pct_barrier ±fraction; session_direction / day_trend override",
+        help="day_trend ±fraction override (default mode uses 0.01)",
     )
     ap.add_argument(
         "--session-hours",
@@ -899,7 +896,7 @@ def main() -> None:
     ap.add_argument(
         "--interval",
         default="1h",
-        choices=["1h", "15m"],
+        choices=["5m", "15m", "1h", "4h"],
         help="Primary bar interval for train + replay (default 1h)",
     )
     ap.add_argument(
@@ -911,7 +908,7 @@ def main() -> None:
     ap.add_argument(
         "--backbone",
         default="tcn",
-        help="Model backbone: tcn | smartBSEntryV2 | smartBSTF | smartBSDualTF",
+        help="Model backbone: tcn | smartBSEntryV2 | smartBSTF",
     )
     ap.add_argument(
         "--signal-engines",
@@ -942,6 +939,12 @@ def main() -> None:
         help="Replay: pre-session AI → open at session start, close at session end "
         "(off by default; use --session-hold to enable)",
     )
+    ap.add_argument(
+        "--holdout-days",
+        type=int,
+        default=-1,
+        help="Holdout days at series end (default 360; 5m defaults to 90 so train has bars)",
+    )
     ap.add_argument("--skip-train", action="store_true")
     ap.add_argument("--skip-existing", action="store_true", help="Skip train if .pt exists")
     ap.add_argument(
@@ -951,11 +954,16 @@ def main() -> None:
     )
     args = ap.parse_args()
 
+    from smartbs_engines.labels import normalize_label_mode
+
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     engines = [e.strip().lower() for e in args.engines.split(",") if e.strip()]
     train_years = float(args.train_years)
-    label_mode = str(args.label_mode)
+    label_mode = normalize_label_mode(args.label_mode)
     interval = str(args.interval).strip().lower()
+    holdout_days = int(args.holdout_days)
+    if holdout_days < 0:
+        holdout_days = 90 if interval == "5m" else 360
     ai_threshold = float(args.ai_threshold)
     base = Path(__file__).resolve().parent
     ckpt_root = Path(args.ckpt_root) if str(args.ckpt_root).strip() else base / "checkpoints"
@@ -966,6 +974,7 @@ def main() -> None:
     print(f"Symbols: {symbols}")
     print(f"Engines: {engines}")
     print(f"Interval: {interval}")
+    print(f"Holdout: {holdout_days}d")
     print(f"Backbone: {args.backbone}")
     print(f"Signal policy: {args.signal_policy} | raw_ai: {args.raw_ai_strategy}")
     if str(args.signal_engines).strip():
@@ -1012,21 +1021,6 @@ def main() -> None:
         label_desc = (
             f"forward_return horizon={args.horizon} thr={args.return_threshold:g}"
         )
-    elif label_mode == "next_direction":
-        label_desc = (
-            "next_direction (range break: hi>prev→L, lo<prev→S; "
-            "both→larger excursion; inside→FLAT)"
-        )
-    elif label_mode == "pct_barrier":
-        label_desc = (
-            f"pct_barrier ±{args.barrier_pct:g} horizon={args.barrier_horizon}"
-        )
-    elif label_mode == "session_direction":
-        pct = 0.005 if abs(float(args.barrier_pct) - 0.02) < 1e-15 else float(args.barrier_pct)
-        label_desc = (
-            f"session_direction open→close ±{pct:g} "
-            f"(session_hours={args.session_hours})"
-        )
     elif label_mode == "session_trend":
         raw_k = float(args.barrier_k)
         k = 2.0 if abs(raw_k - 1.0) < 1e-15 else raw_k
@@ -1041,17 +1035,17 @@ def main() -> None:
             f"day_trend today's NY end close vs ±{pct:g} "
             f"(session_hours={args.session_hours})"
         )
-    elif label_mode == "pivot_breakout":
-        plen = int(args.pivot_len)
+    elif label_mode == "rolle_breakout":
+        plen = int(args.rolle_len)
         label_desc = (
-            f"pivot_breakout rolling L={plen} extremes "
-            f"(immediate update or first break within {plen} bars)"
+            f"rolle_breakout L={plen}: next {plen} bars REH-only→LONG, "
+            f"REL-only→SHORT, neither/both→FLAT"
         )
     else:
         label_desc = f"triple_barrier k={args.barrier_k:g} horizon={args.barrier_horizon}"
     print(
         f"Labels: {label_desc} "
-        f"| Window: train_years={train_years:g} → 1h∩15m align → holdout 360d"
+        f"| Window: train_years={train_years:g} → 1h∩15m align → holdout {holdout_days}d"
     )
 
     if not args.skip_train:
@@ -1079,8 +1073,9 @@ def main() -> None:
                         ma_len=int(args.ma_len),
                         barrier_pct=float(args.barrier_pct),
                         session_hours=str(args.session_hours),
-                        pivot_len=int(args.pivot_len),
+                        rolle_len=int(args.rolle_len),
                         interval=interval,
+                        holdout_days=holdout_days,
                         backbone=str(args.backbone),
                         kernel_size=int(args.kernel_size) or None,
                         signal_engines=str(args.signal_engines or ""),
